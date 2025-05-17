@@ -98,6 +98,11 @@ KV* extract_form_values_delete_archive(const cJSON *json, int *num_items) {
     return extract_form_values_generic(json, num_items, expected);
 }
 
+KV* extract_form_values_delete_account(const cJSON *json, int *num_items) {
+    const int expected = 1;
+    return extract_form_values_generic(json, num_items, expected);
+}
+
 KV* extract_form_values_archive(const cJSON *json, int *num_items) {
     const int expected = 3;
     return extract_form_values_generic(json, num_items, expected);
@@ -389,6 +394,56 @@ char* delete_json_archive(const char* filename,char* archive, char* username){
     return res;
 }
 
+char* delete_json_account(const char* filename, char* account){
+    FILE* f  = fopen(filename,"r");
+    char* res = "";
+    if(f != NULL){
+        struct stat st;
+        cJSON *root;
+        if (stat(filename, &st) == 0) {
+            size_t size = st.st_size;
+            char *data = malloc(size + 1);
+            fread(data, 1, size, f);
+            data[size] = '\0';
+            fclose(f);   
+            if(strcmp(data,"")!=0){
+                root = cJSON_Parse(data);
+                if (root) {
+                    cJSON *account_array = cJSON_GetObjectItemCaseSensitive(root, "accounts");
+                    if (cJSON_IsArray(account_array)){
+                        bool found = false;
+                        int count_account = cJSON_GetArraySize(account_array);
+                        // Step B: loop accounts once
+                        for (int y = 0; y < count_account; ++y) {
+                            cJSON *acct = cJSON_GetArrayItem(account_array,y);
+                            cJSON *jauthor = cJSON_GetObjectItemCaseSensitive(acct,"username");
+                            if(strcmp(account,jauthor->valuestring)==0){
+                                cJSON_DeleteItemFromArray(account_array, y);
+                                found = true;
+                            }   
+                        }
+                        if(found){
+                            char *out = cJSON_Print(root);
+                            cJSON_Delete(root);
+                            FILE* f = fopen(filename, "w");
+                            if (f == NULL) {
+                                ESP_LOGE(TAG, "Failed to open file for writing: %s (errno: %d)", filename, errno);
+                            }else {  
+                                fwrite(out, 1, strlen(out), f);
+                                fclose(f);
+                                ESP_LOGI(TAG, "File written: %s", filename);
+                                res = "ok";            
+                            }
+                            free(out);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return res;
+}
+
 char* write_archive(const char* filename,KV* array,int count){
     FILE* f  = fopen(filename,"r");
     char* res = "";
@@ -471,13 +526,6 @@ char* write_archive(const char* filename,KV* array,int count){
             }
         }
     }
-    return res;
-}
-
-char* write_file(const char* filename,char* file,char* archive,char* password,char* name_file,char* username){
-    char* res = "";
-    
-    
     return res;
 }
 
@@ -1213,7 +1261,7 @@ static esp_err_t delete_handler(httpd_req_t *req)
 }
 
 
-int delete_folder_recursive(const char *path,const char* username,const char* archive,const char* long_username,const char* long_archive) {
+int delete_folder_recursive_archive(const char *path,KV* array) {
     DIR *d = opendir(path);
     if (!d) {
         fprintf(stderr, "opendir %s failed: %s\n", path, strerror(errno));
@@ -1221,7 +1269,6 @@ int delete_folder_recursive(const char *path,const char* username,const char* ar
     }
     struct dirent *entry;
     while ((entry = readdir(d)) != NULL) {
-        // Salta "." e ".."
         dynstr_t path_child_fat,path_name;
         dynstr_init(&path_child_fat);
         dynstr_init(&path_name);
@@ -1230,15 +1277,20 @@ int delete_folder_recursive(const char *path,const char* username,const char* ar
             continue;
         }
 
-        // Costruisci il percorso completo
-        char name_fat[13];
+        char* username = array[0].value;
+        char* archive = array[1].value;
+        char* username_fat = array[2].value;
+        char* archive_fat = array[3].value;
 
+            // Costruisci il percorso completo
+        char name_fat[13];
+   
         dynstr_append(&path_child_fat,"0:/FILE/");
         dynstr_append(&path_child_fat,username);
         dynstr_append(&path_child_fat,"/");
         dynstr_append(&path_child_fat,archive);
         dynstr_append(&path_child_fat,"/");
-
+  
         if(!name_fat_file(path_child_fat.buf,entry->d_name,name_fat,sizeof(name_fat))){
             printf("\n Errore contenuto\n");
             dynstr_free(&path_child_fat);
@@ -1252,7 +1304,7 @@ int delete_folder_recursive(const char *path,const char* username,const char* ar
         }
 
         printf("\n file: %s",name_fat);
-        
+           
         dynstr_append(&path_name,MOUNT_POINT"/FILE/");
         dynstr_append(&path_name,username);
         dynstr_append(&path_name,"/");
@@ -1260,7 +1312,6 @@ int delete_folder_recursive(const char *path,const char* username,const char* ar
         dynstr_append(&path_name,"/");
         dynstr_append(&path_name,name_fat);
 
-        
         struct stat st;
         if (stat(path_name.buf, &st) != 0) {
             fprintf(stderr, "stat %s failed: %s\n", path_name.buf, strerror(errno));
@@ -1272,7 +1323,6 @@ int delete_folder_recursive(const char *path,const char* username,const char* ar
 
         if (S_ISDIR(st.st_mode)) {} 
         else {
-            // È un file: cancellalo
             if (unlink(path_name.buf) != 0) {
                 fprintf(stderr, "unlink %s failed: %s\n", path_name.buf, strerror(errno));
                 closedir(d);
@@ -1286,7 +1336,8 @@ int delete_folder_recursive(const char *path,const char* username,const char* ar
         path_name.len      = 0;
         path_name.buf[0]   = '\0';
         dynstr_free(&path_child_fat);
-        dynstr_free(&path_name);   
+        dynstr_free(&path_name); 
+       
     }
     closedir(d);
 
@@ -1296,10 +1347,111 @@ int delete_folder_recursive(const char *path,const char* username,const char* ar
         return -1;
     }else{
         printf("\n Cartella %s eliminata\n",path);
-        char* res = delete_json_archive("/sdcard/CIPHER~1/FILE~1.JSO",long_archive,long_username);
+        char* res = delete_json_archive("/sdcard/CIPHER~1/FILE~1.JSO",array[1].value,array[0].value);
         if(strcmp(res,"ok")==0){
-            printf("\n archive json aggiornato\n ");
-            return 0;
+           printf("\n archive json aggiornato archive\n ");
+           return 0;
+        }
+    }
+    return -1;
+}
+
+int delete_folder_recursive_account(const char *path,KV* array) {
+    DIR *d = opendir(path);
+    if (!d) {
+        fprintf(stderr, "opendir %s failed: %s\n", path, strerror(errno));
+        return -1;
+    }
+    struct dirent *entry;
+    while ((entry = readdir(d)) != NULL) {
+        dynstr_t path_,path_fat_username;
+        dynstr_init(&path_);
+        dynstr_init(&path_fat_username);
+
+        printf("username_fat = \"%s\"\n", array[1].value);
+
+        dynstr_append(&path_fat_username,"0:/FILE/");
+        dynstr_append(&path_fat_username,array[1].value); 
+        dynstr_append(&path_fat_username,"/");
+
+        char archive_fat[12] = "";
+        if (!name_fat(path_fat_username.buf, entry->d_name, archive_fat, sizeof(archive_fat))) {
+            printf("archive_fat = \"%s\"\n", archive_fat);
+            printf("\n Errore archive\n");
+            dynstr_free(&path_);
+            dynstr_free(&path_fat_username);
+            return -1;
+        }    
+
+        printf("archive_fat = \"%s\"\n", archive_fat);
+
+        size_t ulen = strlen(archive_fat);
+        while (ulen && archive_fat[ulen-1]==' ') {
+            archive_fat[--ulen]='\0'; 
+        }
+
+        dynstr_append(&path_,MOUNT_POINT"/FILE/");
+        dynstr_append(&path_,array[1].value);
+        dynstr_append(&path_,"/");
+        dynstr_append(&path_,archive_fat);
+
+        printf("\n path: %s", path_.buf);
+
+        KV *arr = malloc(4 * sizeof *arr);
+        if (!arr) {
+            return -1;
+        }
+
+        arr[0].key = strdup("username");
+        arr[1].key = strdup("archive");
+        arr[2].key = strdup("username_fat");
+        arr[3].key = strdup("archive_fat");
+
+        arr[0].value = strdup(array[0].value);
+        arr[1].value = strdup(entry->d_name);
+        arr[2].value = strdup(array[1].value);
+        arr[3].value = strdup(archive_fat);
+
+        struct stat st;
+        if (stat(path_.buf, &st) != 0) {
+            fprintf(stderr, "stat %s failed: %s\n", path_.buf, strerror(errno));
+            closedir(d);
+            dynstr_free(&path_);
+            dynstr_free(&path_fat_username);
+            return -1;
+        }
+
+        if (S_ISDIR(st.st_mode)) {
+            if (delete_folder_recursive_archive(path_.buf,arr) != 0)
+            {
+                dynstr_free(&path_fat_username);
+                dynstr_free(&path_);
+                closedir(d);
+                return -1;
+            }
+        } 
+            
+        for(int i=0;i<4;i++){
+            free(arr[i].key);
+            free(arr[i].value); 
+        }
+        free(arr);
+
+        dynstr_free(&path_);
+        dynstr_free(&path_fat_username);
+    }
+    closedir(d);
+
+    // Rimuovi la directory ora vuota
+    if (rmdir(path) != 0) {
+        fprintf(stderr, "rmdir %s failed: %s\n", path, strerror(errno));
+        return -1;
+    }else{
+        printf("\n Cartella %s eliminata\n",path);
+        char* res = delete_json_account("/sdcard/CIPHER~1/ACCOUN~1.JSO",array[0].value);
+        if(strcmp(res,"ok")==0){
+           printf("\n archive json aggiornato archive\n ");
+           return 0;
         }
     }
     return -1;
@@ -1398,12 +1550,33 @@ esp_err_t delete_archive(const char *input,httpd_req_t *req) {
     dynstr_append(&path,"/");
     dynstr_append(&path,archive_fat);
 
-
     printf("\n path: %s", path.buf);
+
+    KV *arr = malloc(4 * sizeof *arr);
+    if (!arr) {
+        return ESP_FAIL;
+    }
+
+    arr[0].key = strdup("username");
+    arr[1].key = strdup("archive");
+    arr[2].key = strdup("username_fat");
+    arr[3].key = strdup("archive_fat");
+
+    arr[0].value = strdup(username);
+    arr[1].value = strdup(archive);
+    arr[2].value = strdup(username_fat);
+    arr[3].value = strdup(archive_fat);
+
     char *log = "{\"status\":\"not ok\"}";
-    if(delete_folder_recursive(path.buf,username_fat,archive_fat,username,archive)==0){
+    if(delete_folder_recursive_archive(path.buf,arr)==0){
         log = "{\"status\":\"ok\"}";
     }
+
+    for(int i=0;i<4;i++){
+        free(arr[i].key);
+        free(arr[i].value);
+    }
+    free(arr);
 
     dynstr_free(&path);
     dynstr_free(&path_fat_username);
@@ -1425,13 +1598,13 @@ esp_err_t delete_account(const char *input,httpd_req_t *req) {
         
         return ESP_FAIL;
     }   
-    KV *array = extract_form_values_delete_archive(json, &count);
+    KV *array = extract_form_values_delete_account(json, &count);
     cJSON_Delete(json);
     if (!array) {
         return ESP_FAIL;
     }
 
-    char *archive = NULL,*username = NULL;
+    char *username = NULL;
 
     // cleanup everything in one place
     for (int i = 0; i < count; ++i) {
@@ -1448,23 +1621,14 @@ esp_err_t delete_account(const char *input,httpd_req_t *req) {
         httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"username missing\"}",HTTPD_RESP_USE_STRLEN);
         return ESP_FAIL;
     }
-    if (!archive) {
-        ESP_LOGE(TAG, "archive missing in JSON");
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"archive missing\"}",HTTPD_RESP_USE_STRLEN);   
-        return ESP_FAIL;
-    }
 
-    dynstr_t path,path_fat_username;
+    dynstr_t path;
     dynstr_init(&path);
-    dynstr_init(&path_fat_username);
 
     char username_fat[12] = "";
     if (!name_fat("0:/FILE/", username, username_fat, sizeof(username_fat))) {
         printf("\n Errore username \n");
         dynstr_free(&path);
-        dynstr_free(&path_fat_username);
-        free(archive);
         free(username);
         httpd_resp_send(req, "{\"status\":\"error\",\"message\":\"invalid username SFN\"}", HTTPD_RESP_USE_STRLEN);
         return ESP_FAIL;
@@ -1477,45 +1641,34 @@ esp_err_t delete_account(const char *input,httpd_req_t *req) {
 
     printf("username_fat = \"%s\"\n", username_fat);
 
-    dynstr_append(&path_fat_username,"0:/FILE/");
-    dynstr_append(&path_fat_username,username_fat);
-    dynstr_append(&path_fat_username,"/");
+    dynstr_append(&path,MOUNT_POINT"/FILE/");
+    dynstr_append(&path,username_fat);
+    
+    printf("\n path: %s", path.buf);
 
-
-    char archive_fat[12] = "";
-    if (!name_fat(path_fat_username.buf, archive, archive_fat, sizeof(archive_fat))) {
-        printf("archive_fat = \"%s\"\n", archive_fat);
-        printf("\n Errore archive\n");
-        dynstr_free(&path);
-        dynstr_free(&path_fat_username);
-        free(archive);
-        free(username);
-        httpd_resp_send(req, "{\"status\":\"error\",\"message\":\"invalid archive SFN\"}", HTTPD_RESP_USE_STRLEN);
+    KV *arr = malloc(2 * sizeof *arr);
+    if (!arr) {
         return ESP_FAIL;
     }
 
-    printf("archive_fat = \"%s\"\n", archive_fat);
+    arr[0].key = strdup("username");
+    arr[1].key = strdup("username_fat");
 
-    size_t ulen = strlen(archive_fat);
-    while (ulen && archive_fat[ulen-1]==' ') {
-        archive_fat[--ulen]='\0'; 
-    }
+    arr[0].value = strdup(username);
+    arr[1].value = strdup(username_fat);
 
-    dynstr_append(&path,MOUNT_POINT"/FILE/");
-    dynstr_append(&path,username_fat);
-    dynstr_append(&path,"/");
-    dynstr_append(&path,archive_fat);
-
-
-    printf("\n path: %s", path.buf);
     char *log = "{\"status\":\"not ok\"}";
-    if(delete_folder_recursive(path.buf,username_fat,archive_fat,username,archive)==0){
+    if(delete_folder_recursive_account(path.buf,arr)==0){
         log = "{\"status\":\"ok\"}";
     }
 
+    for(int i=0;i<2;i++){
+        free(arr[i].key);
+        free(arr[i].value);
+    }
+    free(arr);
+
     dynstr_free(&path);
-    dynstr_free(&path_fat_username);
-    free(archive);
     free(username);
 
     httpd_resp_set_type(req, "application/json");

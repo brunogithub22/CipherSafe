@@ -110,9 +110,6 @@
 #define CHUNKED_THRESHOLD   (8 * 1024)   // still unused, but kept for reference
 #define CHUNK_BUF_SIZE      (4 * 1024)   // 4 KiB streaming chunks
 
-static SemaphoreHandle_t sd_mutex;
-static int ref_count = 0;
-
 //———————————————————————————————————————————————————
 // MIME lookup remains unchanged
 typedef struct {
