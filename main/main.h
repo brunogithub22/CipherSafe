@@ -1,6 +1,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "esp_wifi.h"
+#include <driver/gpio.h>
 #include "esp_log.h"
 #include "string.h"
 #include "esp_event.h"
@@ -24,7 +25,6 @@
 #include "mbedtls/ctr_drbg.h"
 #include "mbedtls/sha256.h"
 #include "esp_vfs.h"
-#include <dirent.h>
 #include <ctype.h>
 #include "esp_system.h"
 #include "esp_https_server.h"
@@ -56,6 +56,7 @@
 #include "mbedtls/base64.h"
 #include "lwip/inet.h"
 #include <fcntl.h>   
+#include <dirent.h>
 #include "ff.h"  
 
 #define BREVO_HOST   "api.brevo.com"
@@ -155,7 +156,9 @@ typedef struct {
     char password[32];
     char archive[32];
     char author[32];
-    int  totalChunks;
+    int totalChunks;
+    bool done;
+    size_t cumulative_bytes; 
 } upload_meta_t;
 
 // Tabella statica in RAM
@@ -171,3 +174,9 @@ typedef struct {
     size_t  len;       // lunghezza attuale della stringa
     size_t  cap;       // capacità allocata
 } dynstr_t;
+
+#define BUTTON_GPIO 22
+
+static SemaphoreHandle_t buttonSemaphore;
+static volatile int count = 0;
+static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;

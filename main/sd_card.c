@@ -121,6 +121,7 @@ bool name_fat(const char* path, const char* long_name, char* out_sfn, size_t out
             // Confronta il nome lungo
             if (strcasecmp(fno.fname, long_name) == 0) {
                 const char* src = fno.altname[0] ? fno.altname : fno.fname;
+                printf("\ndirectory: %s\n",src);
                 strncpy(out_sfn, src, out_len - 1);
                 out_sfn[out_len - 1] = '\0';
                 f_closedir(&dir);
@@ -133,49 +134,50 @@ bool name_fat(const char* path, const char* long_name, char* out_sfn, size_t out
     return false;
 }
 
-bool name_fat_file(const char* path, const char* long_name, char* out_sfn, size_t out_len) {
+bool name_fat_file(const char* dir_path,
+                   const char* long_name,
+                   char* out_sfn,
+                   size_t out_len)
+{
     FRESULT res;
+    FF_DIR dir;
     FILINFO fno;
-    
-    // Prepara la struttura FILINFO per ottenere anche l'altname (SFN)
-#if _USE_LFN
-    // Se _USE_LFN è abilitato, destinare buffer LFN a NULL per leggere solo altname
-    fno.lfname = NULL;
-    fno.lfsize = 0;
-#endif
 
-    // Prova a ottenere le informazioni sul file
-    res = f_stat(path, &fno);
+    // 1) Apri la directory
+    res = f_opendir(&dir, dir_path);
     if (res != FR_OK) {
-        printf("Errore f_stat: %d\n", res);
+        printf("Errore f_opendir(\"%s\"): %d\n", dir_path, res);
         return false;
     }
 
-    // Estrai il nome lungo dal FILINFO (dipende da _USE_LFN)
-    const char* found_name = NULL;
-#if _USE_LFN
-    if (fno.lfname && strcmp(fno.lfname, long_name) == 0) {
-        // Il nome lungo è uguale a quello cercato
-        found_name = fno.altname[0] ? fno.altname : fno.lfname;
-    } else
-#endif
-    {
-        // Confronta il nome base (fname) con long_name
-        if (strcasecmp(fno.fname, long_name) == 0) {
-            found_name = fno.altname[0] ? fno.altname : fno.fname;
+    // 2) Scorri tutte le voci con f_readdir
+    while ((res = f_readdir(&dir, &fno)) == FR_OK && fno.fname[0]) {
+        // fno.fname è sempre il nome breve (8.3) null-terminated
+        // fno.altname, se compilato, contiene l'8.3 alternativo (o è vuoto)
+
+        // Confronto case-insensitive: long_name vs fname (SFN) o altname
+        if (strcasecmp(fno.fname, long_name) == 0 ||
+            (fno.altname[0] && strcasecmp(fno.altname, long_name) == 0))
+        {
+            const char *sfn = (fno.altname[0] ? fno.altname : fno.fname);
+
+            strncpy(out_sfn, sfn, out_len - 1);
+            out_sfn[out_len - 1] = '\0';
+
+            f_closedir(&dir);
+            return true;
         }
     }
 
-    if (!found_name) {
-        // Il file con quel nome lungo non corrisponde
-        return false;
+    // 4) Se esce per errore di readdir, loggalo
+    if (res != FR_OK) {
+        printf("Errore f_readdir(\"%s\"): %d\n", dir_path, res);
     }
 
-    // Copia in out_sfn tenendo conto della lunghezza massima
-    strncpy(out_sfn, found_name, out_len - 1);
-    out_sfn[out_len - 1] = '\0';
-    return true;
+    f_closedir(&dir);
+    return false;
 }
+
 
 bool create_folder( char* parent, char* name) {
     if (!sd_dir_exists(parent)) {
@@ -266,6 +268,7 @@ void dynstr_free(dynstr_t *s) {
 bool sd_unmount(){
     esp_vfs_fat_sdcard_unmount(MOUNT_POINT, card);
     ESP_LOGI(TAG, "Scheda SD smontata");
+    mounted = false;
     return true;
 }
 
@@ -283,147 +286,185 @@ void generate_aes_iv(unsigned char *iv) {
     mbedtls_entropy_free(&entropy);
 }
 
-// Sezione critica per accesso concorrente
-void sd_enter_critical(void) {
-    xSemaphoreTake(sd_mutex, portMAX_DELAY);
-    if (ref_count++ == 0) {
-        if(!sd_mount()){
-            ESP_LOGE(TAG,"Errore mount");
-        }
-    }
-    xSemaphoreGive(sd_mutex);
-}
 
-void sd_exit_critical(void) {
-    xSemaphoreTake(sd_mutex, portMAX_DELAY);
-    if (--ref_count == 0) {
-        if(!sd_unmount()){
-            ESP_LOGE(TAG,"Errore unmount");
-        }
-    }
-    mounted = false;
-    xSemaphoreGive(sd_mutex);
-}
-
-
-// Function to encrypt a file using AES-256-CBC
-int encrypt_file(const char *input_file, const char *output_file, unsigned char *key) {
-    FILE *fin = fopen(input_file, "rb");
-    FILE *fout = fopen(output_file, "wb");
-    if (!fin) {
-        printf("Error opening input file.\n");
+// Generate random IV
+static int generate_iv(unsigned char iv[AES_BLOCK_SIZE]) {
+    mbedtls_entropy_context entropy;
+    mbedtls_ctr_drbg_context ctr_drbg;
+    const char *pers = "aes_iv_gen";
+    mbedtls_entropy_init(&entropy);
+    mbedtls_ctr_drbg_init(&ctr_drbg);
+    if (mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy,
+                              (const unsigned char *) pers, strlen(pers)) != 0) {
         return -1;
     }
-    if (!fout) {
-        printf("Error opening output file.\n");
-        fclose(fin);
+    if (mbedtls_ctr_drbg_random(&ctr_drbg, iv, AES_BLOCK_SIZE) != 0) {
         return -1;
     }
-
-    unsigned char iv[AES_BLOCK_SIZE];
-    generate_aes_iv(iv);
-
-    // Write IV to the output file (needed for decryption)
-    fwrite(iv, 1, AES_BLOCK_SIZE, fout);
-
-    // Initialize AES context
-    mbedtls_aes_context aes;
-    mbedtls_aes_init(&aes);
-    mbedtls_aes_setkey_enc(&aes, key, AES_KEY_SIZE * 8); // Set AES-256 key
-
-    // Allocate buffers on the heap to reduce stack usage
-    unsigned char *buffer = malloc(BUFFER_SIZE + AES_BLOCK_SIZE);
-    unsigned char *encrypted_buffer = malloc(BUFFER_SIZE + AES_BLOCK_SIZE);
-    if (!buffer || !encrypted_buffer) {
-        printf("Error allocating memory.\n");
-        fclose(fin);
-        fclose(fout);
-        mbedtls_aes_free(&aes);
-        free(buffer);
-        free(encrypted_buffer);
-        return -1;
-    }
-
-    size_t bytes_read;
-    while ((bytes_read = fread(buffer, 1, BUFFER_SIZE, fin)) > 0) {
-        // Determine padding length for the block (PKCS#7)
-        size_t padding = AES_BLOCK_SIZE - (bytes_read % AES_BLOCK_SIZE);
-        if (padding == 0) {
-            padding = AES_BLOCK_SIZE;
-        }
-        // Apply padding to the buffer
-        memset(buffer + bytes_read, padding, padding);
-        bytes_read += padding;
-
-        // Encrypt the block (CBC mode updates the IV)
-        mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, bytes_read, iv, buffer, encrypted_buffer);
-        fwrite(encrypted_buffer, 1, bytes_read, fout);
-    }
-
-    free(buffer);
-    free(encrypted_buffer);
-    fclose(fin);
-    fclose(fout);
-    mbedtls_aes_free(&aes);
-
-    printf("File encrypted successfully!\n");
+    mbedtls_ctr_drbg_free(&ctr_drbg);
+    mbedtls_entropy_free(&entropy);
     return 0;
 }
 
-// Function to decrypt a file using AES-256-CBC
-int decrypt_file(const char *input_file, const char *output_file, unsigned char *key) {
-    FILE *fin = fopen(input_file, "rb");
-    FILE *fout = fopen(output_file, "wb");
+int encrypt_file(const char *input_file,
+                 const char *output_file,
+                 const unsigned char *key)
+{
+    int ret = 0;
+    FILE *fin  = NULL;
+    FILE *fout = NULL;
+    unsigned char iv[AES_BLOCK_SIZE];
+    unsigned char *inbuf  = NULL;
+    unsigned char *outbuf = NULL;
+    size_t inlen, olen;
+
+    mbedtls_cipher_context_t ctx;
+    const mbedtls_cipher_info_t *info = NULL;
+
+    /* 1) Apertura file */
+    fin  = fopen(input_file,  "rb");
+    fout = fopen(output_file, "wb");
     if (!fin || !fout) {
-        printf("Error opening files.\n");
-        if(fin) fclose(fin);
-        if(fout) fclose(fout);
-        return -1;
+        ret = -1;
+        goto cleanup;
     }
 
-    unsigned char iv[AES_BLOCK_SIZE];
-    // Read the IV from the encrypted file (first block)
-    fread(iv, 1, AES_BLOCK_SIZE, fin);
-
-    // Initialize AES context for decryption
-    mbedtls_aes_context aes;
-    mbedtls_aes_init(&aes);
-    mbedtls_aes_setkey_dec(&aes, key, AES_KEY_SIZE * 8);
-
-    // Allocate buffers on the heap
-    unsigned char *buffer = malloc(BUFFER_SIZE + AES_BLOCK_SIZE);
-    unsigned char *decrypted_buffer = malloc(BUFFER_SIZE + AES_BLOCK_SIZE);
-    if (!buffer || !decrypted_buffer) {
-        printf("Error allocating memory.\n");
-        fclose(fin);
-        fclose(fout);
-        mbedtls_aes_free(&aes);
-        free(buffer);
-        free(decrypted_buffer);
-        return -1;
+    /* 2) Genera IV e scrivilo in testa al file di destinazione */
+    if (generate_iv(iv) != 0 ||
+        fwrite(iv, 1, AES_BLOCK_SIZE, fout) != AES_BLOCK_SIZE) {
+        ret = -1;
+        goto cleanup;
     }
 
-    size_t bytes_read;
-    while ((bytes_read = fread(buffer, 1, BUFFER_SIZE, fin)) > 0) {
-        mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, bytes_read, iv, buffer, decrypted_buffer);
-        
-        // Remove padding from the final block
-        size_t padding = decrypted_buffer[bytes_read - 1];
-        if (padding > 0 && padding <= AES_BLOCK_SIZE) {
-            bytes_read -= padding;
+    /* 3) Inizializza e configura il contesto cipher */
+    mbedtls_cipher_init(&ctx);
+    info = mbedtls_cipher_info_from_type(MBEDTLS_CIPHER_AES_256_CBC);
+    if ( info == NULL
+      || mbedtls_cipher_setup(&ctx, info) != 0
+      || mbedtls_cipher_setkey(&ctx, key, AES_KEY_SIZE * 8, MBEDTLS_ENCRYPT) != 0
+      || mbedtls_cipher_set_iv(&ctx, iv, AES_BLOCK_SIZE) != 0
+      /* ← abilita padding PKCS#7, default se definito, ma meglio esplicitarlo */ 
+      || mbedtls_cipher_set_padding_mode(&ctx, MBEDTLS_PADDING_PKCS7) != 0  /* :contentReference[oaicite:0]{index=0} */
+      || mbedtls_cipher_reset(&ctx) != 0 )
+    {
+        ret = -1;
+        goto cleanup;
+    }
+
+    /* 4) Alloca buffer di input/output */
+    inbuf  = malloc(BUFFER_SIZE);
+    outbuf = malloc(BUFFER_SIZE + AES_BLOCK_SIZE);
+    if (!inbuf || !outbuf) {
+        ret = -1;
+        goto cleanup;
+    }
+
+    /* 5) Streaming encrypt */
+    while ((inlen = fread(inbuf, 1, BUFFER_SIZE, fin)) > 0) {
+        if (mbedtls_cipher_update(&ctx, inbuf, inlen, outbuf, &olen) != 0 ||
+            fwrite(outbuf, 1, olen, fout) != olen) {
+            ret = -1;
+            goto cleanup;
         }
-        fwrite(decrypted_buffer, 1, bytes_read, fout);
     }
 
-    free(buffer);
-    free(decrypted_buffer);
-    fclose(fin);
-    fclose(fout);
-    mbedtls_aes_free(&aes);
+    /* 6) Finish: padding e ultimo blocco */
+    if (mbedtls_cipher_finish(&ctx, outbuf, &olen) != 0 ||
+        fwrite(outbuf, 1, olen, fout) != olen) {
+        ret = -1;
+        goto cleanup;
+    }
 
-    printf("File decrypted successfully!\n");
-    return 0;
+cleanup:
+    /* 7) Rilascio risorse */
+    mbedtls_cipher_free(&ctx);
+    if (inbuf)  free(inbuf);
+    if (outbuf) free(outbuf);
+    if (fin)    fclose(fin);
+    if (fout)   fclose(fout);
+
+    return ret;
 }
+
+int decrypt_file(const char *input_file,
+                 const char *output_file,
+                 const unsigned char *key)
+{
+    int ret = 0;
+    FILE *fin  = NULL;
+    FILE *fout = NULL;
+    unsigned char iv[AES_BLOCK_SIZE];
+    unsigned char *inbuf  = NULL;
+    unsigned char *outbuf = NULL;
+    size_t inlen, olen;
+
+    mbedtls_cipher_context_t ctx;
+    const mbedtls_cipher_info_t *info = NULL;
+
+    /* 1) Apertura file */
+    fin  = fopen(input_file,  "rb");
+    fout = fopen(output_file, "wb");
+    if (!fin || !fout) {
+        ret = -1;
+        goto cleanup;
+    }
+
+    /* 2) Leggi IV in testa al file */
+    if (fread(iv, 1, AES_BLOCK_SIZE, fin) != AES_BLOCK_SIZE) {
+        ret = -1;
+        goto cleanup;
+    }
+
+    /* 3) Inizializza e configura il contesto cipher */
+    mbedtls_cipher_init(&ctx);
+    info = mbedtls_cipher_info_from_type(MBEDTLS_CIPHER_AES_256_CBC);
+    if ( info == NULL
+      || mbedtls_cipher_setup(&ctx, info) != 0
+      || mbedtls_cipher_setkey(&ctx, key, AES_KEY_SIZE * 8, MBEDTLS_DECRYPT) != 0
+      || mbedtls_cipher_set_iv(&ctx, iv, AES_BLOCK_SIZE) != 0
+      /* ← abilita padding PKCS#7 per poter rimuovere correttamente il padding al finish */
+      || mbedtls_cipher_set_padding_mode(&ctx, MBEDTLS_PADDING_PKCS7) != 0
+      || mbedtls_cipher_reset(&ctx) != 0 )
+    {
+        ret = -1;
+        goto cleanup;
+    }
+
+    /* 4) Alloca buffer di input/output */
+    inbuf  = malloc(BUFFER_SIZE + AES_BLOCK_SIZE);
+    outbuf = malloc(BUFFER_SIZE + AES_BLOCK_SIZE);
+    if (!inbuf || !outbuf) {
+        ret = -1;
+        goto cleanup;
+    }
+
+    /* 5) Streaming decrypt */
+    while ((inlen = fread(inbuf, 1, BUFFER_SIZE + AES_BLOCK_SIZE, fin)) > 0) {
+        if (mbedtls_cipher_update(&ctx, inbuf, inlen, outbuf, &olen) != 0 ||
+            fwrite(outbuf, 1, olen, fout) != olen) {
+            ret = -1;
+            goto cleanup;
+        }
+    }
+
+    /* 6) Finish: rimuovi padding e scrivi ultimo blocco */
+    if (mbedtls_cipher_finish(&ctx, outbuf, &olen) != 0 ||
+        fwrite(outbuf, 1, olen, fout) != olen) {
+        ret = -1;
+        goto cleanup;
+    }
+
+cleanup:
+    /* 7) Rilascio risorse */
+    mbedtls_cipher_free(&ctx);
+    if (inbuf)  free(inbuf);
+    if (outbuf) free(outbuf);
+    if (fin)    fclose(fin);
+    if (fout)   fclose(fout);
+
+    return ret;
+}
+
 
 // Function to create a SHA-256 hash key from input data
 void create_key(const unsigned char *input_data, unsigned char *sha256_hash) {
@@ -436,4 +477,51 @@ void create_key(const unsigned char *input_data, unsigned char *sha256_hash) {
     mbedtls_sha256_update(&ctx, input_data, size_input_data);
     mbedtls_sha256_finish(&ctx, sha256_hash);
     mbedtls_sha256_free(&ctx);
+}
+
+// ISR: disabilita e segnala il task
+static void IRAM_ATTR event_interrupt(void *arg) {
+    uint32_t gpio_num = (uint32_t) arg;
+    gpio_intr_disable(gpio_num);           // blocca edge successivi
+    xSemaphoreGiveFromISR(buttonSemaphore, NULL);
+}
+
+// Configura pull-up e falling edge
+static void button_configuration(int gpio) {
+    gpio_config_t config = {
+        .pin_bit_mask   = (1ULL << gpio),
+        .mode           = GPIO_MODE_INPUT,
+        .pull_up_en     = GPIO_PULLUP_ENABLE,
+        .pull_down_en   = GPIO_PULLDOWN_DISABLE,
+        .intr_type      = GPIO_INTR_NEGEDGE
+    };
+    gpio_config(&config);
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(gpio, event_interrupt, (void*) gpio);
+}
+
+// Task di gestione: debounce + wait rilascio
+static void button_task(void *arg) {
+    while (1) {
+        if (xSemaphoreTake(buttonSemaphore, portMAX_DELAY) == pdTRUE) {
+            portENTER_CRITICAL(&mux);
+            count++;
+            portEXIT_CRITICAL(&mux);
+            ESP_LOGI("ESP32", "Pulsante premuto! %d volte", count);
+
+            if(mounted){
+                if(sd_unmount()){}
+            }
+            // Debounce software
+            vTaskDelay(pdMS_TO_TICKS(200));
+
+            // Aspetta che il pulsante sia rilasciato (HIGH)
+            while (gpio_get_level(BUTTON_GPIO) == 0) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+
+            // Ri-abilita l’interrupt per il prossimo click
+            gpio_intr_enable(BUTTON_GPIO);
+        }
+    }
 }

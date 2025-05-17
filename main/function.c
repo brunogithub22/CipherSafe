@@ -93,6 +93,10 @@ KV* extract_form_values_account(const cJSON *json, int *num_items, const char *t
     return extract_form_values_generic(json, num_items, expected);
 }
 
+KV* extract_form_values_delete_archive(const cJSON *json, int *num_items) {
+    const int expected = 2;
+    return extract_form_values_generic(json, num_items, expected);
+}
 
 KV* extract_form_values_archive(const cJSON *json, int *num_items) {
     const int expected = 3;
@@ -210,7 +214,7 @@ char* write_account_file(const char* filename,KV* array,int count){
     return res;
 }
 
-char* check_archive(const char* filename,char* username,char* archive,char* passowrd,char* task,char* file_name,char* file_name_fat){
+char* check_archive(const char* filename,char* username,char* archive,char* task,char* file_name){
     FILE* f  = fopen(filename,"r");
     char* res = "";
     if(f != NULL){
@@ -243,7 +247,6 @@ char* check_archive(const char* filename,char* username,char* archive,char* pass
                                         if(count_files > 0 || count_files == 0){
                                             cJSON *file = cJSON_CreateObject();
                                             cJSON_AddStringToObject(file, "filename", file_name);
-                                            cJSON_AddStringToObject(file, "name_fat", file_name_fat);
                                             cJSON_AddItemToArray(files_array,file);
 
                                             char *out = cJSON_Print(root);
@@ -271,6 +274,120 @@ char* check_archive(const char* filename,char* username,char* archive,char* pass
     return res;
 }
 
+char* delete_json_file(const char* filename,char* username,char* archive,char* file_name){
+    FILE* f  = fopen(filename,"r");
+    char* res = "";
+    if(f != NULL){
+        struct stat st;
+        cJSON *root;
+        if (stat(filename, &st) == 0) {
+            size_t size = st.st_size;
+            char *data = malloc(size + 1);
+            fread(data, 1, size, f);
+            data[size] = '\0';
+            fclose(f);   
+            if(strcmp(data,"")!=0){
+                root = cJSON_Parse(data);
+                if (root) {
+                    cJSON *archive_array = cJSON_GetObjectItemCaseSensitive(root, "archives");
+                    if (cJSON_IsArray(archive_array)){
+                        int count_account = cJSON_GetArraySize(archive_array);
+                        // Step B: loop accounts once
+                        for (int y = 0; y < count_account; ++y) {
+                            cJSON *acct = cJSON_GetArrayItem(archive_array,y);
+                            cJSON *jauthor = cJSON_GetObjectItemCaseSensitive(acct,"author");
+                            cJSON *jarchive = cJSON_GetObjectItemCaseSensitive(acct,"archive");
+                            if ((jauthor && strcmp(jauthor->valuestring,username)==0)&& (jarchive && strcmp(jarchive->valuestring,archive)==0)){
+                                cJSON *files_array = cJSON_GetObjectItemCaseSensitive(acct,"files");
+                                if(cJSON_IsArray(files_array)){
+                                    int count_files = cJSON_GetArraySize(files_array);
+                                    bool delete_file = false;
+                                    if(count_files > 0 || count_files == 0){
+                                        for (int i = 0; i < cJSON_GetArraySize(files_array); i++) {
+                                            cJSON *file_obj = cJSON_GetArrayItem(files_array, i);
+                                            cJSON *jfn = cJSON_GetObjectItemCaseSensitive(file_obj, "filename");
+                                            if (jfn && strcmp(jfn->valuestring, file_name) == 0) {
+                                                cJSON_DeleteItemFromArray(files_array, i);
+                                                delete_file = true;
+                                                i--;  // ricontrolla la nuova elemento in posizione i
+                                            }
+                                        }
+                                        char *out = cJSON_Print(root);
+                                        FILE* f = fopen(filename, "w");
+                                        if (f == NULL) {
+                                            ESP_LOGE(TAG, "Failed to open file for writing: %s (errno: %d)", filename, errno);
+                                        }else {  
+                                            fwrite(out, 1, strlen(out), f);
+                                            fclose(f);
+                                            ESP_LOGI(TAG, "File written: %s", filename);
+                                            if(delete_file){
+                                                res = "ok";
+                                            }    
+                                        }
+                                         free(out);
+                                    }
+                                }                              
+                            }
+                        }
+                        cJSON_Delete(root);
+                    }
+                }
+            }
+        }
+    }
+    return res;
+}
+
+char* delete_json_archive(const char* filename,char* archive, char* username){
+    FILE* f  = fopen(filename,"r");
+    char* res = "";
+    if(f != NULL){
+        struct stat st;
+        cJSON *root;
+        if (stat(filename, &st) == 0) {
+            size_t size = st.st_size;
+            char *data = malloc(size + 1);
+            fread(data, 1, size, f);
+            data[size] = '\0';
+            fclose(f);   
+            if(strcmp(data,"")!=0){
+                root = cJSON_Parse(data);
+                if (root) {
+                    cJSON *archive_array = cJSON_GetObjectItemCaseSensitive(root, "archives");
+                    if (cJSON_IsArray(archive_array)){
+                        bool found = false;
+                        int count_account = cJSON_GetArraySize(archive_array);
+                        // Step B: loop accounts once
+                        for (int y = 0; y < count_account; ++y) {
+                            cJSON *acct = cJSON_GetArrayItem(archive_array,y);
+                            cJSON *jauthor = cJSON_GetObjectItemCaseSensitive(acct,"author");
+                            cJSON *jarchive = cJSON_GetObjectItemCaseSensitive(acct,"archive");
+                            if(strcmp(username,jauthor->valuestring)==0 && strcmp(archive,jarchive->valuestring)==0){
+                                cJSON_DeleteItemFromArray(archive_array, y);
+                                found = true;
+                            }   
+                        }
+                        if(found){
+                            char *out = cJSON_Print(root);
+                            cJSON_Delete(root);
+                            FILE* f = fopen(filename, "w");
+                            if (f == NULL) {
+                                ESP_LOGE(TAG, "Failed to open file for writing: %s (errno: %d)", filename, errno);
+                            }else {  
+                                fwrite(out, 1, strlen(out), f);
+                                fclose(f);
+                                ESP_LOGI(TAG, "File written: %s", filename);
+                                res = "ok";            
+                            }
+                            free(out);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return res;
+}
 
 char* write_archive(const char* filename,KV* array,int count){
     FILE* f  = fopen(filename,"r");
@@ -309,7 +426,7 @@ char* write_archive(const char* filename,KV* array,int count){
                             if (jauthor && strcmp(jauthor->valuestring,in_author)==0)
                                 same_author= true;
                         }
-                        if((same_author && !same_archive) || (!same_author && !same_author) ){
+                        if((same_author && !same_archive) || (!same_author && !same_archive) || (!same_author && same_archive) ){
                             dynstr_t path,path_fat;
                             if (dynstr_init(&path) != 0) return "";
                             dynstr_append(&path, MOUNT_POINT"/FILE/");
@@ -411,9 +528,6 @@ void make_log(const char *message,const char *check,const char* password, char *
     char *log = malloc(buf_size);
     if (!log) {
         *out_log = NULL;
-        if(mounted){
-            sd_exit_critical();
-        }
         return;
     }
 
@@ -434,25 +548,17 @@ esp_err_t sign_up(const char *input,httpd_req_t *req) {
     if (!json) {
         const char *err = cJSON_GetErrorPtr();
         ESP_LOGE(TAG, "JSON parse error before: %s", err ? err : "unknown");
-        if(mounted){
-            sd_exit_critical();
-        }
+        
         return ESP_FAIL;
     }   
     KV *array = extract_form_values_account(json, &count, "sign_up");
     cJSON_Delete(json);
     if (!array) {
-        // extraction failed
-        if(mounted){
-            sd_exit_critical();
-        }
         return ESP_FAIL;
     }
 
-    sd_enter_critical();
     char *email = NULL,*username = NULL,*password = NULL;
     char* message = write_account_file("/sdcard/CIPHER~1/ACCOUN~1.JSO", array, count);
-    sd_exit_critical();
 
     // cleanup everything in one place
     for (int i = 0; i < count; ++i) {
@@ -473,27 +579,20 @@ esp_err_t sign_up(const char *input,httpd_req_t *req) {
         ESP_LOGE(TAG, "username missing in JSON");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"username missing\"}",HTTPD_RESP_USE_STRLEN);
-        if(mounted){
-            sd_exit_critical();
-        }
         return ESP_FAIL;
     }
     if (!password) {
         ESP_LOGE(TAG, "password missing in JSON");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"username missing\"}",HTTPD_RESP_USE_STRLEN);
-        if(mounted){
-            sd_exit_critical();
-        }
+        
         return ESP_FAIL;
     }
     if (!email) {
         ESP_LOGE(TAG, "email missing in JSON");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"username missing\"}",HTTPD_RESP_USE_STRLEN);
-        if(mounted){
-            sd_exit_critical();
-        }
+        
         return ESP_FAIL;
     }
 
@@ -518,9 +617,7 @@ esp_err_t sign_in(const char *input, httpd_req_t *req)
     if (!json) {
         const char *err = cJSON_GetErrorPtr();
         ESP_LOGE(TAG, "JSON parse error before: %s", err ? err : "unknown");
-        if(mounted){
-            sd_exit_critical();
-        }
+        
         return ESP_FAIL;
     }
 
@@ -528,9 +625,7 @@ esp_err_t sign_in(const char *input, httpd_req_t *req)
     cJSON_Delete(json);
     if (!array_account) {
         ESP_LOGE(TAG, "extract_form_values_account failed");
-        if(mounted){
-            sd_exit_critical();
-        }
+        
         return ESP_FAIL;
     }
 
@@ -553,26 +648,20 @@ esp_err_t sign_in(const char *input, httpd_req_t *req)
         ESP_LOGE(TAG, "username missing in JSON");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"username missing\"}",HTTPD_RESP_USE_STRLEN);
-        if(mounted){
-            sd_exit_critical();
-        }
+        
         return ESP_FAIL;
     }
     if (!password) {
         ESP_LOGE(TAG, "password missing in JSON");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"username missing\"}",HTTPD_RESP_USE_STRLEN);
-        if(mounted){
-            sd_exit_critical();
-        }
+        
         return ESP_FAIL;
     }
 
-    sd_enter_critical();
     char* message = check_account("/sdcard/CIPHER~1/ACCOUN~1.JSO", username,password);
-    printf("\nMessaggio account: %s",message);
+    printf("\nMessaggio account: %s\n",message);
     char* log = "";
-    sd_exit_critical();
 
     make_log(message,username,password, &log);
 
@@ -591,9 +680,7 @@ esp_err_t new_archive(const char *input, httpd_req_t *req){
     if (!json) {
         const char *err = cJSON_GetErrorPtr();
         ESP_LOGE(TAG, "JSON parse error before: %s", err ? err : "unknown");
-        if(mounted){
-            sd_exit_critical();
-        }
+        
         return ESP_FAIL;
     }
 
@@ -601,17 +688,12 @@ esp_err_t new_archive(const char *input, httpd_req_t *req){
     cJSON_Delete(json);
     if (!array_archive) {
         ESP_LOGE(TAG, "extract_form_values_account failed");
-        if(mounted){
-            sd_exit_critical();
-        }
+        
         return ESP_FAIL;
     }
 
-    sd_enter_critical();
     char *archive = NULL, *password = NULL;
     char* message = write_archive("/sdcard/CIPHER~1/FILE~1.JSO", array_archive, count);
-    sd_exit_critical();
-
     // cleanup everything in one place
     for (int i = 0; i < count; ++i) {
         if (strcmp(array_archive[i].key, "archive") == 0) {
@@ -629,18 +711,14 @@ esp_err_t new_archive(const char *input, httpd_req_t *req){
         ESP_LOGE(TAG, "username missing in JSON");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"username missing\"}",HTTPD_RESP_USE_STRLEN);
-        if(mounted){
-            sd_exit_critical();
-        }
+        
         return ESP_FAIL;
     }
     if (!password) {
         ESP_LOGE(TAG, "password missing in JSON");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"username missing\"}",HTTPD_RESP_USE_STRLEN);
-        if(mounted){
-            sd_exit_critical();
-        }
+        
         return ESP_FAIL;
     }
     
@@ -663,9 +741,7 @@ esp_err_t load_file(const char *input, httpd_req_t *req){
     if (!json) {
         const char *err = cJSON_GetErrorPtr();
         ESP_LOGE(TAG, "JSON parse error before: %s", err ? err : "unknown");
-        if(mounted){
-            sd_exit_critical();
-        }
+        
         return ESP_FAIL;
     }
 
@@ -673,9 +749,7 @@ esp_err_t load_file(const char *input, httpd_req_t *req){
     cJSON_Delete(json);
     if (!array_account) {
         ESP_LOGE(TAG, "extract_form_values_account failed");
-        if(mounted){
-            sd_exit_critical();
-        }
+        
         return ESP_FAIL;
     }
 
@@ -700,34 +774,26 @@ esp_err_t load_file(const char *input, httpd_req_t *req){
         ESP_LOGE(TAG, "username missing in JSON");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"username missing\"}",HTTPD_RESP_USE_STRLEN);
-        if(mounted){
-            sd_exit_critical();
-        }
+        
         return ESP_FAIL;
     }
     if (!password) {
         ESP_LOGE(TAG, "password missing in JSON");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"username missing\"}",HTTPD_RESP_USE_STRLEN);
-        if(mounted){
-            sd_exit_critical();
-        }
+        
         return ESP_FAIL;
     }
     if (!archive) {
         ESP_LOGE(TAG, "archive missing in JSON");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"username missing\"}",HTTPD_RESP_USE_STRLEN);
-        if(mounted){
-            sd_exit_critical();
-        }
+        
         return ESP_FAIL;
     }
 
-    sd_enter_critical();
     char* log = "";
-    char* message = check_archive("/sdcard/CIPHER~1/FILE~1.JSO", username,archive,password,"check archive","","");
-    sd_exit_critical();
+    char* message = check_archive("/sdcard/CIPHER~1/FILE~1.JSO", username,archive,"check archive","");
 
     make_log(message, archive,password, &log);
 
@@ -742,203 +808,53 @@ esp_err_t load_file(const char *input, httpd_req_t *req){
 }
 
 
-
-esp_err_t upload_chunk( httpd_req_t *req){
-    char uploadId[33], idx_s[16], tot_s[16];
-    if (httpd_req_get_hdr_value_str(req, "X-Upload-Id", uploadId, sizeof(uploadId)) != ESP_OK ||
-        httpd_req_get_hdr_value_str(req, "X-Chunk-Index", idx_s, sizeof(idx_s)) != ESP_OK ||
-        httpd_req_get_hdr_value_str(req, "X-Total-Chunks", tot_s, sizeof(tot_s)) != ESP_OK) {
-        ESP_LOGE(TAG, "Header mancante");
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Header mancante");
-        if(mounted){
-            sd_exit_critical();
-        }
-        return ESP_FAIL;
-    }
-
-    int chunkIndex = strtol(idx_s, NULL, 10);
-    int totalChunks = strtol(tot_s, NULL, 10);
-
-    // Ricerca dell'uploadId nella upload_table
-    upload_meta_t *meta = NULL;
-    for (int i = 0; i < MAX_UPLOADS; i++) {
-        if (strcmp(upload_table[i].uploadId, uploadId) == 0) {
-            meta = &upload_table[i];
-            break;
-        }
-    }
-
-    if (!meta) {
-        ESP_LOGE(TAG, "uploadId non valido: %s", uploadId);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "uploadId non valido");
-        if(mounted){
-            sd_exit_critical();
-        }
-        return ESP_FAIL;
-    }
-
-    sd_enter_critical();
-    dynstr_t path,path_encrypt,path_fat,name_encrypt;
-    if (dynstr_init(&path) != 0){
-        if(mounted){
-            sd_exit_critical();
-        }
-        return ESP_FAIL;
-    }
-
-    dynstr_append(&path, MOUNT_POINT"/FILE/");
-    dynstr_append(&path, meta->author);
-    dynstr_append(&path, "/");
-    dynstr_append(&path, meta->archive);
-    dynstr_append(&path, "/");
-    dynstr_append(&path, meta->filename);
-
-    printf("Path: %s\n", path.buf);
-    
-    FILE *f = fopen(path.buf, "ab");
-    if (!f) {
-        ESP_LOGE(TAG, "Errore apertura file: %s", path.buf);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Errore apertura file");
-        if(mounted){
-            sd_exit_critical();
-        }
-        return ESP_FAIL;
-    }
-
-    // Scrittura dei dati ricevuti
-    char buf[CHUNK_BUF_SIZE];
-    int rlen;
-    while ((rlen = httpd_req_recv(req, buf, sizeof(buf))) > 0) {
-        // Log memoria prima di scrivere
-        size_t heap_before = esp_get_free_heap_size();
-        ESP_LOGI(TAG, "Heap prima del fwrite: %u bytes liberi", heap_before);
-
-        fwrite(buf, 1, rlen, f);
-
-        // Log memoria dopo scrivere
-        size_t heap_after = esp_get_free_heap_size();
-        ESP_LOGI(TAG, "Heap dopo il fwrite: %u bytes liberi", heap_after);
-    }
-    fclose(f);
-
-    char *log,*res = "";
-
-    // Se è l'ultimo chunk, libera lo slot nella upload_table
-    if (chunkIndex + 1 == meta->totalChunks) {
-        if (dynstr_init(&path_encrypt) != 0){
-            if(mounted){
-                sd_exit_critical();
-            }
-            return ESP_FAIL;
-        }
-        dynstr_append(&path_encrypt,path.buf);
-        dynstr_append(&path_encrypt,".aes");
-        if(encrypt_file(path.buf,path_encrypt.buf,(unsigned char*)meta->password)==0){
-            res = "ok";
-            unlink(path.buf);
-        }
-        if(strcmp(res,"ok")==0){
-            res = "";
-            if (dynstr_init(&path_fat) != 0){
-                if(mounted){
-                   sd_exit_critical();
-                }
-                return ESP_FAIL;
-            }
-
-            dynstr_append(&path_fat, "0:/FILE/");
-            dynstr_append(&path_fat, meta->author);
-            dynstr_append(&path_fat, "/");
-            dynstr_append(&path_fat, meta->archive);
-            dynstr_append(&path_fat, "/");
-            dynstr_append(&path_fat, meta->filename);
-            dynstr_append(&path_fat,".aes");
-            char file_name_encrypt_fat[13];
-    
-            if (dynstr_init(&name_encrypt) != 0){
-                if(mounted){
-                   sd_exit_critical();
-                }
-                return ESP_FAIL;
-            }
-            dynstr_append(&name_encrypt,meta->filename);
-            dynstr_append(&name_encrypt,".aes");
-            if(name_fat_file(path_fat.buf,name_encrypt.buf,file_name_encrypt_fat,sizeof(file_name_encrypt_fat))){
-                res = check_archive("/sdcard/CIPHER~1/FILE~1.JSO", meta->author,meta->archive,meta->password,"upload file",meta->filename,file_name_encrypt_fat);
-                if(strcmp(res,"ok")==0){
-                    printf("\n File json aggiornato \n");
-                }else{
-                    printf("\n File json non aggiornato \n");
-                }
-            }else{
-                printf("\nFile name fat non ok \n");
-            }
-            dynstr_free(&path_fat);
-            dynstr_free(&name_encrypt);
-                
-        }else{
-            printf("\n Errore con la creazione del file criptato \n");
-        }
-        dynstr_free(&path_encrypt);
-        make_log(res,meta->filename,meta->password, &log);
-        *meta = (upload_meta_t){0};
-        ESP_LOGI(TAG, "Upload completato: %s", path.buf);
-    }
-    dynstr_free(&path);
-    sd_exit_critical();
-
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, (const char*) log, HTTPD_RESP_USE_STRLEN);
-    return ESP_OK;
-}
-
-esp_err_t upload_start( httpd_req_t *req){
-    // Lettura completa del body JSON
+// ============================
+// === upload_start_handler ===
+// ============================
+esp_err_t upload_start_handler(httpd_req_t *req) {
     size_t to_read = req->content_len;
+    ESP_LOGI(TAG, "📤 Inizio upload: payload JSON = %u byte", (unsigned)to_read);
+
     char *buf = malloc(to_read + 1);
     if (!buf) return ESP_ERR_NO_MEM;
-    size_t read = 0;
-    while (read < to_read) {
-        int r = httpd_req_recv(req, buf + read, to_read - read);
-        if (r <= 0) break;
-        read += r;
-    }
-    buf[read] = '\0';
 
-    // Parsing JSON
+    size_t received = 0;
+    while (received < to_read) {
+        int ret = httpd_req_recv(req, buf + received, to_read - received);
+        if (ret <= 0) {
+            free(buf);
+            ESP_LOGE(TAG, "Errore nella ricezione JSON di start_upload");
+            return ESP_FAIL;
+        }
+        received += ret;
+        ESP_LOGI(TAG, "📥 Ricevuti JSON start: %u/%u byte", (unsigned)received, (unsigned)to_read);
+    }
+    buf[received] = '\0';
+
     cJSON *json = cJSON_Parse(buf);
     free(buf);
     if (!json) {
-        ESP_LOGE(TAG, "JSON parse failed");
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
-        if(mounted){
-            sd_exit_critical();
-        }
         return ESP_FAIL;
     }
 
+    // Estrai metadati
     const cJSON *j_fn = cJSON_GetObjectItem(json, "filename");
     const cJSON *j_pw = cJSON_GetObjectItem(json, "password");
     const cJSON *j_ar = cJSON_GetObjectItem(json, "archive");
     const cJSON *j_au = cJSON_GetObjectItem(json, "author");
     const cJSON *j_tc = cJSON_GetObjectItem(json, "totalChunks");
-    if (!j_fn || !j_pw || !j_ar || !j_au || !j_tc ||
-        !cJSON_IsString(j_fn) || !cJSON_IsString(j_pw) ||
+    if (!cJSON_IsString(j_fn) || !cJSON_IsString(j_pw) ||
         !cJSON_IsString(j_ar) || !cJSON_IsString(j_au) ||
         !cJSON_IsNumber(j_tc)) {
         cJSON_Delete(json);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing fields");
-        if(mounted){
-            sd_exit_critical();
-        }
         return ESP_FAIL;
     }
 
-    // Genera uploadId
+    // Genera uploadId e registra slot
     char uploadId[33];
     generate_random_id(uploadId);
-
-    // Trova slot libero
     bool slot_found = false;
     for (int i = 0; i < MAX_UPLOADS; i++) {
         if (upload_table[i].uploadId[0] == '\0') {
@@ -948,23 +864,662 @@ esp_err_t upload_start( httpd_req_t *req){
             strncpy(upload_table[i].archive,  j_ar->valuestring, sizeof(upload_table[i].archive)-1);
             strncpy(upload_table[i].author,   j_au->valuestring, sizeof(upload_table[i].author)-1);
             upload_table[i].totalChunks = j_tc->valueint;
+            upload_table[i].done        = false;
             slot_found = true;
+            upload_table[i].cumulative_bytes = 0; 
             break;
         }
     }
     cJSON_Delete(json);
 
     if (!slot_found) {
-        if(mounted){
-            sd_exit_critical();
-        }
+        ESP_LOGE(TAG, "Nessuno slot libero per upload");
         return ESP_FAIL;
     }
 
-    // Risposta JSON con uploadId
+    // Risposta
     char resp[64];
     snprintf(resp, sizeof(resp), "{\"uploadId\":\"%s\"}", uploadId);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, resp);
+    ESP_LOGI(TAG, "📶 Sessione upload avviata: uploadId=%s", uploadId);
+    return ESP_OK;
+}
+
+void replace_spaces(char *s, char ch) {
+    for (size_t i = 0; i < strlen(s); ++i) {
+        if (s[i] == ' ') {
+            s[i] = ch;
+        }
+    }
+}
+
+// =================================
+// === upload_chunk_handler    ====
+// =================================
+esp_err_t upload_chunk_handler(httpd_req_t *req) {
+    char uploadId[33], idx_s[16], tot_s[16];
+    if (httpd_req_get_hdr_value_str(req, "X-Upload-Id",    uploadId, sizeof(uploadId)) != ESP_OK ||
+        httpd_req_get_hdr_value_str(req, "X-Chunk-Index",  idx_s,     sizeof(idx_s))  != ESP_OK ||
+        httpd_req_get_hdr_value_str(req, "X-Total-Chunks", tot_s,     sizeof(tot_s))  != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing headers");
+        return ESP_FAIL;
+    }
+
+    int chunkIndex  = atoi(idx_s);
+    int totalChunks = atoi(tot_s);
+
+    // Trova metadati
+    upload_meta_t *meta = NULL;
+    int slot = -1;
+    for (int i = 0; i < MAX_UPLOADS; i++) {
+        if (strcmp(upload_table[i].uploadId, uploadId) == 0) {
+            meta = &upload_table[i];
+            slot = i;
+            break;
+        }
+    }
+    if (!meta) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid uploadId");
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "📤 Ricevo chunk %d/%d per uploadId=%s", chunkIndex+1, totalChunks, uploadId);
+
+    replace_spaces(meta->filename,'_');
+
+    dynstr_t path; dynstr_init(&path);
+    dynstr_append(&path, MOUNT_POINT "/FILE/");
+    dynstr_append(&path, meta->author);
+    dynstr_append(&path, "/");
+    dynstr_append(&path, meta->archive);
+    dynstr_append(&path, "/");
+    dynstr_append(&path, meta->filename);
+
+    FILE *f = fopen(path.buf, "ab");
+    if (!f) {
+        ESP_LOGE(TAG, "Errore apertura file: %s", path.buf);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "File open failed");
+        dynstr_free(&path);
+        return ESP_FAIL;
+    }
+
+    char buf[CHUNK_BUF_SIZE];
+    int  rlen;
+    while ((rlen = httpd_req_recv(req, buf, sizeof(buf))) > 0) {
+        fwrite(buf, 1, rlen, f);
+        meta->cumulative_bytes += rlen;
+        ESP_LOGI(TAG, "📝 Cumulativo: %u byte ricevuti finora", (unsigned)meta->cumulative_bytes);
+    }
+    fclose(f);
+
+    // Se ultimo chunk, cifro, segno done e resetto contatore
+    if (chunkIndex + 1 == totalChunks) {
+        ESP_LOGI(TAG, "✅ Upload completato: totali %u byte", (unsigned)meta->cumulative_bytes);
+
+        dynstr_t path_enc; 
+        dynstr_init(&path_enc);
+        dynstr_append(&path_enc, path.buf);
+        dynstr_append(&path_enc, ".aes");
+
+        unsigned char key_hash256[32];
+        create_key((unsigned char*)meta->password, key_hash256);
+        if (encrypt_file(path.buf, path_enc.buf, key_hash256) == 0) {
+            upload_table[slot].done = true;
+            char* res = check_archive("/sdcard/CIPHER~1/FILE~1.JSO", meta->author,meta->archive,"upload file",meta->filename);
+            if(strcmp(res,"ok")==0){
+                printf("\n JSON aggiornato \n");
+            }
+            unlink(path.buf);
+        } else {
+            ESP_LOGE(TAG, "Errore cifratura finale");
+        }
+        dynstr_free(&path_enc);
+    }
+
+    dynstr_free(&path);
+   
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"chunk ok\"}");
+    return ESP_OK;
+}
+
+// ====================================
+// === upload_finalize_handler     ====
+// ====================================
+esp_err_t upload_finalize_handler(httpd_req_t *req) {
+    char uploadId[33];
+    if (httpd_req_get_hdr_value_str(req, "X-Upload-Id", uploadId, sizeof(uploadId)) != ESP_OK) {
+        return httpd_resp_send_404(req);
+    }
+    for (int i = 0; i < MAX_UPLOADS; i++) {
+        if (strcmp(upload_table[i].uploadId, uploadId) == 0) {
+            const char *resp = upload_table[i].done
+                ? "{\"status\":\"done\"}"
+                : "{\"status\":\"pending\"}";
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_sendstr(req, resp);
+            ESP_LOGI(TAG, "Polling finalize: uploadId=%s status=%s",
+                     uploadId,
+                     upload_table[i].done ? "done" : "pending");
+            return ESP_OK;
+        }
+    }
+    return httpd_resp_send_404(req);
+}
+// ============================
+// ===   download_file    ====
+// ============================
+esp_err_t download_handler(httpd_req_t *req)
+{
+    // --- 1) Ricezione e parsing JSON ---
+    size_t to_read = req->content_len;
+    ESP_LOGI(TAG, "📥 Inizio download JSON %u byte", (unsigned)to_read);
+
+    char *buf = malloc(to_read + 1);
+    if (!buf) return ESP_ERR_NO_MEM;
+
+    size_t rec = 0;
+    while (rec < to_read) {
+        int r = httpd_req_recv(req, buf + rec, to_read - rec);
+        if (r <= 0) {
+            free(buf);
+            ESP_LOGE(TAG, "Errore ricezione JSON");
+            return ESP_FAIL;
+        }
+        rec += r;
+    }
+    buf[rec] = '\0';
+
+    cJSON *json = cJSON_Parse(buf);
+    free(buf);
+    if (!json) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+    const cJSON *j_fn = cJSON_GetObjectItem(json, "filename");
+    const cJSON *j_pw = cJSON_GetObjectItem(json, "password");
+    const cJSON *j_ar = cJSON_GetObjectItem(json, "archive");
+    const cJSON *j_au = cJSON_GetObjectItem(json, "author");
+    if (!cJSON_IsString(j_fn) || !cJSON_IsString(j_pw) ||
+        !cJSON_IsString(j_ar) || !cJSON_IsString(j_au)) {
+        cJSON_Delete(json);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing fields");
+        return ESP_FAIL;
+    }
+    char *filename = strdup(j_fn->valuestring);
+    char *password = strdup(j_pw->valuestring);
+    char *archive  = strdup(j_ar->valuestring);
+    char *author   = strdup(j_au->valuestring);
+    cJSON_Delete(json);
+
+    // --- 2) Deriva chiave ---
+    unsigned char key_hash[32];
+    create_key((unsigned char*)password, key_hash);
+
+    // --- 3) Percorsi file cifrato e file temporaneo decrypted ---
+    dynstr_t path_enc; dynstr_init(&path_enc);
+    dynstr_append(&path_enc, MOUNT_POINT "/FILE/");
+    dynstr_append(&path_enc, author);
+    dynstr_append(&path_enc, "/");
+    dynstr_append(&path_enc, archive);
+    dynstr_append(&path_enc, "/");
+    dynstr_append(&path_enc, filename);
+    dynstr_append(&path_enc, ".aes");
+
+    dynstr_t path; dynstr_init(&path);
+    dynstr_append(&path, MOUNT_POINT "/FILE/");
+    dynstr_append(&path, author);
+    dynstr_append(&path, "/");
+    dynstr_append(&path, archive);
+    dynstr_append(&path, "/");
+    dynstr_append(&path, filename);
+
+      // 2) Decrypt file su disco
+    int dec_ret = decrypt_file(path_enc.buf, path.buf, key_hash);
+    if (dec_ret != 0) {
+        ESP_LOGE(TAG, "Errore in decrypt_file (%d)", dec_ret);
+        return ESP_FAIL;
+    }
+
+    struct stat st;
+    if (stat(path_enc.buf, &st) != 0 || !S_ISREG(st.st_mode)) {
+        ESP_LOGE(TAG, "File decriptato non trovato: %s", path_enc.buf);
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "File not found");
+        return ESP_FAIL;
+    }
+    size_t total = st.st_size;
+    ESP_LOGI(TAG, "➡️  Avvio streaming di %u byte", (unsigned)total);
+
+    // 3) Apri file decriptato per lo streaming
+    FILE *fdec = fopen(path.buf, "rb");
+    if (!fdec) {
+        ESP_LOGE(TAG, "Impossibile aprire %s", path.buf);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Open failed");
+        return ESP_FAIL;
+    }
+
+    // Imposta header HTTP per attachment
+    httpd_resp_set_type(req, "application/octet-stream");
+    char cd[128];
+    snprintf(cd, sizeof(cd),
+             "attachment; filename=\"%s\"", filename);
+    httpd_resp_set_hdr(req, "Content-Disposition", cd);
+
+    // Invia a chunk
+    const size_t CHUNK = CHUNK_BUF_SIZE;
+    uint8_t chunk[CHUNK];
+    size_t sent = 0,rlen;
+    while ((rlen = fread(chunk, 1, CHUNK, fdec)) > 0) {
+        if (httpd_resp_send_chunk(req, (const char*)chunk, rlen) != ESP_OK) {
+            ESP_LOGE(TAG, "Errore invio chunk a %u/%u byte",(unsigned)sent, (unsigned)total);
+            break;
+        }
+        sent += rlen;
+        ESP_LOGI(TAG, "⬇️  Scaricati %u/%u byte",(unsigned)sent, (unsigned)total);
+    }
+    httpd_resp_send_chunk(req, NULL, 0);
+    fclose(fdec);
+    dynstr_free(&path_enc);
+    unlink(path.buf);
+    dynstr_free(&path);
+    free(filename);
+    free(password);
+    free(archive);
+    free(author);
+
+    return ESP_OK;
+}
+
+static esp_err_t delete_handler(httpd_req_t *req)
+{
+    // 1) Leggi tutto il body JSON
+    size_t len = req->content_len;
+    char *buf = malloc(len + 1);
+    if (!buf) return ESP_ERR_NO_MEM;
+    if (httpd_req_recv(req, buf, len) != (int)len) {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid body");
+        return ESP_FAIL;
+    }
+    buf[len] = '\0';
+
+    // 2) Parse JSON
+    cJSON *json = cJSON_Parse(buf);
+    free(buf);
+    if (!json) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Malformed JSON");
+        return ESP_FAIL;
+    }
+
+    const cJSON *j_fn = cJSON_GetObjectItemCaseSensitive(json, "filename");
+    const cJSON *j_pw = cJSON_GetObjectItemCaseSensitive(json, "password");
+    const cJSON *j_ar = cJSON_GetObjectItemCaseSensitive(json, "archive");
+    const cJSON *j_au = cJSON_GetObjectItemCaseSensitive(json, "author");
+    if (!cJSON_IsString(j_fn) || !cJSON_IsString(j_pw) ||
+        !cJSON_IsString(j_ar) || !cJSON_IsString(j_au))
+    {
+        cJSON_Delete(json);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing fields");
+        return ESP_FAIL;
+    }
+
+    char *filename = strdup(j_fn->valuestring);
+    char *password = strdup(j_pw->valuestring);
+    char *archive  = strdup(j_ar->valuestring);
+    char *author   = strdup(j_au->valuestring);
+    cJSON_Delete(json);
+
+    // 4) Costruisci il path del file cifrato .aes
+    dynstr_t path; dynstr_init(&path);
+    dynstr_append(&path, MOUNT_POINT "/FILE/");
+    dynstr_append(&path, author);
+    dynstr_append(&path, "/");
+    dynstr_append(&path, archive);
+    dynstr_append(&path, "/");
+    dynstr_append(&path, filename);
+    dynstr_append(&path, ".aes");
+
+    // 5) Verifica esistenza
+    struct stat st;
+    if (stat(path.buf, &st) != 0 || !S_ISREG(st.st_mode)) {
+        dynstr_free(&path);
+        free(filename); free(password); free(archive); free(author);
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "File not found");
+        return ESP_FAIL;
+    }
+
+    // 6) Elimina il file
+    if (unlink(path.buf) != 0) {
+        ESP_LOGE(TAG, "unlink failed: %s", path.buf);
+        dynstr_free(&path);
+        free(filename); free(password); free(archive); free(author);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Delete failed");
+        return ESP_FAIL;
+    }
+    char* res = delete_json_file("/sdcard/CIPHER~1/FILE~1.JSO",author,archive,filename);
+    if(strcmp(res,"ok")==0){
+        printf("\n File tolto dal json\n ");
+    }
+
+    // 7) Cleanup e risposta OK
+    dynstr_free(&path);
+    free(filename); free(password); free(archive); free(author);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"status\":\"ok\"}");
+    return ESP_OK;
+}
+
+
+int delete_folder_recursive(const char *path,const char* username,const char* archive,const char* long_username,const char* long_archive) {
+    DIR *d = opendir(path);
+    if (!d) {
+        fprintf(stderr, "opendir %s failed: %s\n", path, strerror(errno));
+        return -1;
+    }
+    struct dirent *entry;
+    while ((entry = readdir(d)) != NULL) {
+        // Salta "." e ".."
+        dynstr_t path_child_fat,path_name;
+        dynstr_init(&path_child_fat);
+        dynstr_init(&path_name);
+        if (strcmp(entry->d_name, ".") == 0 ||
+            strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        // Costruisci il percorso completo
+        char name_fat[13];
+
+        dynstr_append(&path_child_fat,"0:/FILE/");
+        dynstr_append(&path_child_fat,username);
+        dynstr_append(&path_child_fat,"/");
+        dynstr_append(&path_child_fat,archive);
+        dynstr_append(&path_child_fat,"/");
+
+        if(!name_fat_file(path_child_fat.buf,entry->d_name,name_fat,sizeof(name_fat))){
+            printf("\n Errore contenuto\n");
+            dynstr_free(&path_child_fat);
+            dynstr_free(&path_name);
+            return -1;
+        }
+
+        size_t ulen_ = strlen(name_fat);
+        while (ulen_ && name_fat[ulen_-1]==' ') {
+            name_fat[--ulen_]='\0';
+        }
+
+        printf("\n file: %s",name_fat);
+        
+        dynstr_append(&path_name,MOUNT_POINT"/FILE/");
+        dynstr_append(&path_name,username);
+        dynstr_append(&path_name,"/");
+        dynstr_append(&path_name,archive);
+        dynstr_append(&path_name,"/");
+        dynstr_append(&path_name,name_fat);
+
+        
+        struct stat st;
+        if (stat(path_name.buf, &st) != 0) {
+            fprintf(stderr, "stat %s failed: %s\n", path_name.buf, strerror(errno));
+            closedir(d);
+            dynstr_free(&path_child_fat);
+            dynstr_free(&path_name);
+            return -1;
+        }
+
+        if (S_ISDIR(st.st_mode)) {} 
+        else {
+            // È un file: cancellalo
+            if (unlink(path_name.buf) != 0) {
+                fprintf(stderr, "unlink %s failed: %s\n", path_name.buf, strerror(errno));
+                closedir(d);
+                dynstr_free(&path_child_fat);
+                dynstr_free(&path_name);
+                return -1;
+            }
+        }
+        path_child_fat.len = 0;
+        path_child_fat.buf[0] = '\0';
+        path_name.len      = 0;
+        path_name.buf[0]   = '\0';
+        dynstr_free(&path_child_fat);
+        dynstr_free(&path_name);   
+    }
+    closedir(d);
+
+    // Rimuovi la directory ora vuota
+    if (rmdir(path) != 0) {
+        fprintf(stderr, "rmdir %s failed: %s\n", path, strerror(errno));
+        return -1;
+    }else{
+        printf("\n Cartella %s eliminata\n",path);
+        char* res = delete_json_archive("/sdcard/CIPHER~1/FILE~1.JSO",long_archive,long_username);
+        if(strcmp(res,"ok")==0){
+            printf("\n archive json aggiornato\n ");
+            return 0;
+        }
+    }
+    return -1;
+}
+
+esp_err_t delete_archive(const char *input,httpd_req_t *req) {
+    int count = 0;
+    cJSON *json = cJSON_Parse(input); 
+    if (!json) {
+        const char *err = cJSON_GetErrorPtr();
+        ESP_LOGE(TAG, "JSON parse error before: %s", err ? err : "unknown");
+        
+        return ESP_FAIL;
+    }   
+    KV *array = extract_form_values_delete_archive(json, &count);
+    cJSON_Delete(json);
+    if (!array) {
+        return ESP_FAIL;
+    }
+
+    char *archive = NULL,*username = NULL;
+
+    // cleanup everything in one place
+    for (int i = 0; i < count; ++i) {
+        if(strcmp(array[i].key,"archive")==0){
+            archive = strdup(array[i].value);
+        }
+        if(strcmp(array[i].key,"username")==0){
+            username = strdup(array[i].value);
+        }
+        free(array[i].key);
+        free(array[i].value);
+    }
+    free(array);
+    if (!username) {
+        ESP_LOGE(TAG, "username missing in JSON");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"username missing\"}",HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+    if (!archive) {
+        ESP_LOGE(TAG, "archive missing in JSON");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"archive missing\"}",HTTPD_RESP_USE_STRLEN);   
+        return ESP_FAIL;
+    }
+
+    dynstr_t path,path_fat_username;
+    dynstr_init(&path);
+    dynstr_init(&path_fat_username);
+
+    char username_fat[12] = "";
+    if (!name_fat("0:/FILE/", username, username_fat, sizeof(username_fat))) {
+        printf("\n Errore username \n");
+        dynstr_free(&path);
+        dynstr_free(&path_fat_username);
+        free(archive);
+        free(username);
+        httpd_resp_send(req, "{\"status\":\"error\",\"message\":\"invalid username SFN\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    size_t ulen_ = strlen(username_fat);
+    while (ulen_ && username_fat[ulen_-1]==' ') {
+        username_fat[--ulen_]='\0';
+    }
+
+    printf("username_fat = \"%s\"\n", username_fat);
+
+    dynstr_append(&path_fat_username,"0:/FILE/");
+    dynstr_append(&path_fat_username,username_fat);
+    dynstr_append(&path_fat_username,"/");
+
+
+    char archive_fat[12] = "";
+    if (!name_fat(path_fat_username.buf, archive, archive_fat, sizeof(archive_fat))) {
+        printf("archive_fat = \"%s\"\n", archive_fat);
+        printf("\n Errore archive\n");
+        dynstr_free(&path);
+        dynstr_free(&path_fat_username);
+        free(archive);
+        free(username);
+        httpd_resp_send(req, "{\"status\":\"error\",\"message\":\"invalid archive SFN\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    printf("archive_fat = \"%s\"\n", archive_fat);
+
+    size_t ulen = strlen(archive_fat);
+    while (ulen && archive_fat[ulen-1]==' ') {
+        archive_fat[--ulen]='\0'; 
+    }
+
+    dynstr_append(&path,MOUNT_POINT"/FILE/");
+    dynstr_append(&path,username_fat);
+    dynstr_append(&path,"/");
+    dynstr_append(&path,archive_fat);
+
+
+    printf("\n path: %s", path.buf);
+    char *log = "{\"status\":\"not ok\"}";
+    if(delete_folder_recursive(path.buf,username_fat,archive_fat,username,archive)==0){
+        log = "{\"status\":\"ok\"}";
+    }
+
+    dynstr_free(&path);
+    dynstr_free(&path_fat_username);
+    free(archive);
+    free(username);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, (const char*) log, HTTPD_RESP_USE_STRLEN);
+
+    return ESP_OK;
+}
+
+esp_err_t delete_account(const char *input,httpd_req_t *req) {
+    int count = 0;
+    cJSON *json = cJSON_Parse(input); 
+    if (!json) {
+        const char *err = cJSON_GetErrorPtr();
+        ESP_LOGE(TAG, "JSON parse error before: %s", err ? err : "unknown");
+        
+        return ESP_FAIL;
+    }   
+    KV *array = extract_form_values_delete_archive(json, &count);
+    cJSON_Delete(json);
+    if (!array) {
+        return ESP_FAIL;
+    }
+
+    char *archive = NULL,*username = NULL;
+
+    // cleanup everything in one place
+    for (int i = 0; i < count; ++i) {
+        if(strcmp(array[i].key,"username")==0){
+            username = strdup(array[i].value);
+        }
+        free(array[i].key);
+        free(array[i].value);
+    }
+    free(array);
+    if (!username) {
+        ESP_LOGE(TAG, "username missing in JSON");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"username missing\"}",HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+    if (!archive) {
+        ESP_LOGE(TAG, "archive missing in JSON");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"archive missing\"}",HTTPD_RESP_USE_STRLEN);   
+        return ESP_FAIL;
+    }
+
+    dynstr_t path,path_fat_username;
+    dynstr_init(&path);
+    dynstr_init(&path_fat_username);
+
+    char username_fat[12] = "";
+    if (!name_fat("0:/FILE/", username, username_fat, sizeof(username_fat))) {
+        printf("\n Errore username \n");
+        dynstr_free(&path);
+        dynstr_free(&path_fat_username);
+        free(archive);
+        free(username);
+        httpd_resp_send(req, "{\"status\":\"error\",\"message\":\"invalid username SFN\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    size_t ulen_ = strlen(username_fat);
+    while (ulen_ && username_fat[ulen_-1]==' ') {
+        username_fat[--ulen_]='\0';
+    }
+
+    printf("username_fat = \"%s\"\n", username_fat);
+
+    dynstr_append(&path_fat_username,"0:/FILE/");
+    dynstr_append(&path_fat_username,username_fat);
+    dynstr_append(&path_fat_username,"/");
+
+
+    char archive_fat[12] = "";
+    if (!name_fat(path_fat_username.buf, archive, archive_fat, sizeof(archive_fat))) {
+        printf("archive_fat = \"%s\"\n", archive_fat);
+        printf("\n Errore archive\n");
+        dynstr_free(&path);
+        dynstr_free(&path_fat_username);
+        free(archive);
+        free(username);
+        httpd_resp_send(req, "{\"status\":\"error\",\"message\":\"invalid archive SFN\"}", HTTPD_RESP_USE_STRLEN);
+        return ESP_FAIL;
+    }
+
+    printf("archive_fat = \"%s\"\n", archive_fat);
+
+    size_t ulen = strlen(archive_fat);
+    while (ulen && archive_fat[ulen-1]==' ') {
+        archive_fat[--ulen]='\0'; 
+    }
+
+    dynstr_append(&path,MOUNT_POINT"/FILE/");
+    dynstr_append(&path,username_fat);
+    dynstr_append(&path,"/");
+    dynstr_append(&path,archive_fat);
+
+
+    printf("\n path: %s", path.buf);
+    char *log = "{\"status\":\"not ok\"}";
+    if(delete_folder_recursive(path.buf,username_fat,archive_fat,username,archive)==0){
+        log = "{\"status\":\"ok\"}";
+    }
+
+    dynstr_free(&path);
+    dynstr_free(&path_fat_username);
+    free(archive);
+    free(username);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, (const char*) log, HTTPD_RESP_USE_STRLEN);
+
     return ESP_OK;
 }

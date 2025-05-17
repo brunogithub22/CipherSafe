@@ -3,8 +3,6 @@
 void app_main(void)
 {
 
-    sd_mutex = xSemaphoreCreateMutex();
-
     if(!fun_card()){
         ESP_LOGE(TAG, "SD failed");
         return;
@@ -13,6 +11,10 @@ void app_main(void)
     if(!sd_mount()){
         ESP_LOGE(TAG,"Errore mount");
     }
+
+    buttonSemaphore = xSemaphoreCreateBinary();
+    button_configuration(BUTTON_GPIO);
+    xTaskCreate(button_task, "button_task", 4096, NULL, 5, NULL);
 
     // 2) init NVS (per Wi‑Fi)
     ESP_ERROR_CHECK( nvs_flash_init() );
@@ -25,23 +27,15 @@ void app_main(void)
     // 4) scan & select
     if (!wifi_scan_and_select()) {
         ESP_LOGE(TAG, "No matching AP found");
-        if(mounted){
-            sd_exit_critical();
-        }
+        
         return;
     }
 
     // 5) connect & wait IP
     if (!wifi_connect_and_wait()) {
         ESP_LOGE(TAG, "Wi‑Fi connect failed");
-        if(mounted){
-            sd_exit_critical();
-        }
         return;
     }
-
-    if(web_server()){
-
-    }
+    web_server();
     
 }

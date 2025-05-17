@@ -252,9 +252,6 @@ static void sntp_init_and_wait(void) {
         localtime_r(&now, &timeinfo);
         if (timeinfo.tm_year >= (2020 - 1900)) {
             ESP_LOGI(TAG, "Time synchronized: %s", asctime(&timeinfo));
-            if(mounted){
-               sd_exit_critical();
-            }
             return;
         }
         ESP_LOGI(TAG, "Waiting for system time...");

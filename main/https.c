@@ -34,9 +34,7 @@ static esp_err_t serve_static_stream(httpd_req_t *req, const char *fullpath) {
     if (fd < 0) {
         ESP_LOGW(TAG, "File not found: %s", fullpath);
         // send 404 and return
-        if(mounted){
-            sd_exit_critical();
-        }
+        
         return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not Found");
     }
 
@@ -64,7 +62,6 @@ static esp_err_t serve_static_stream(httpd_req_t *req, const char *fullpath) {
                 ESP_LOGE(TAG, "Chunk send failed: %d", w);
                 close(fd);
                 if(mounted){
-                    sd_exit_critical();
                 }
                 return ESP_FAIL;
             }
@@ -84,9 +81,7 @@ static esp_err_t serve_static_stream(httpd_req_t *req, const char *fullpath) {
 
     if (r < 0) {
         ESP_LOGE(TAG, "Error reading file: %s", fullpath);
-        if(mounted){
-            sd_exit_critical();
-        }
+        
         return ESP_FAIL;
     }
     return ESP_OK;
@@ -105,9 +100,7 @@ static esp_err_t get_handler(httpd_req_t *req){
         strlcat(filepath, uri, sizeof(filepath));
         ESP_LOGI(TAG,"GET JSON %s -> %s", uri, filepath);
         size_t len; char *b=NULL;
-        sd_enter_critical();
         bool ok = read_file(filepath,&b,&len);
-        sd_exit_critical();
         if(!ok){
             return httpd_resp_send_err(req,HTTPD_404_NOT_FOUND,"File not found");
         }
@@ -124,9 +117,7 @@ static esp_err_t get_handler(httpd_req_t *req){
         else
             strlcat(filepath, uri, sizeof(filepath));
         ESP_LOGI(TAG,"GET static %s -> %s", uri, filepath);
-        sd_enter_critical();
         esp_err_t err = serve_static_stream(req, filepath);
-        sd_exit_critical();
         if(err==ESP_FAIL){
             return httpd_resp_send_err(req,HTTPD_404_NOT_FOUND,"File not found");
         }
@@ -166,9 +157,7 @@ static esp_err_t sign_up_handler(httpd_req_t *req) {
     size_t body_len;
     char *body = read_request_body(req, &body_len);
     if (!body){
-        if(mounted){
-            sd_exit_critical();
-        }  
+          
         return ESP_FAIL;
     }
     return sign_up(body, req);
@@ -178,9 +167,7 @@ static esp_err_t sign_in_handler(httpd_req_t *req) {
     size_t body_len;
     char *body = read_request_body(req, &body_len);
     if (!body){
-        if(mounted){
-            sd_exit_critical();
-        }  
+          
         return ESP_FAIL;
     }
     return sign_in(body, req);
@@ -190,9 +177,7 @@ static esp_err_t new_archive_handler(httpd_req_t *req) {
     size_t body_len;
     char *body = read_request_body(req, &body_len);
     if (!body){
-        if(mounted){
-            sd_exit_critical();
-        }  
+          
         return ESP_FAIL;
     }
     return new_archive(body, req);
@@ -202,22 +187,31 @@ static esp_err_t load_file_handler(httpd_req_t *req) {
     size_t body_len;
     char *body = read_request_body(req, &body_len);
     if (!body){
-        if(mounted){
-            sd_exit_critical();
-        }  
+          
         return ESP_FAIL;
     }
     return load_file(body, req);
 }
 
-static esp_err_t upload_chunk_handler(httpd_req_t *req) {
-    return upload_chunk(req);
+static esp_err_t delete_archive_handler(httpd_req_t *req) {
+    size_t body_len;
+    char *body = read_request_body(req, &body_len);
+    if (!body){
+          
+        return ESP_FAIL;
+    }
+    return delete_archive(body, req);
 }
 
-static esp_err_t upload_start_handler(httpd_req_t *req) {
-    return upload_start(req);
+static esp_err_t delete_account_handler(httpd_req_t *req) {
+    size_t body_len;
+    char *body = read_request_body(req, &body_len);
+    if (!body){
+          
+        return ESP_FAIL;
+    }
+    return delete_account(body, req);
 }
-
 
 static httpd_handle_t start_webserver(rest_server_context_t *rest_context) {
     // load cert/key
@@ -229,23 +223,17 @@ static httpd_handle_t start_webserver(rest_server_context_t *rest_context) {
         return NULL;
     }
 
-    if(!sd_unmount()){
-        ESP_LOGE(TAG, "Failed");
-        return NULL;
-    }
-    
     // configure HTTPS server
     httpd_ssl_config_t config = HTTPD_SSL_CONFIG_DEFAULT();
     config.httpd.uri_match_fn = httpd_uri_match_wildcard;
-    config.httpd.recv_wait_timeout = 30;
-    config.httpd.send_wait_timeout = 30;
-    config.httpd.enable_so_linger = true;
-    config.httpd.linger_timeout = 10;
-    config.httpd.keep_alive_enable = true;
-    config.httpd.keep_alive_idle = 60;
-    config.httpd.keep_alive_interval = 5;
-    config.httpd.keep_alive_count = 3;
-    config.httpd.max_open_sockets = 5;
+    config.httpd.enable_so_linger     = true;
+    config.httpd.linger_timeout       = 10;   // aspetta fino a 10s per i dati in coda
+    config.httpd.keep_alive_enable    = true;
+    config.httpd.keep_alive_idle      = 30;   // attiva keep-alive dopo 30s di inattività
+    config.httpd.keep_alive_interval  = 5;    // invia un ping ogni 5s
+    config.httpd.keep_alive_count     = 3;    // per 3 volte
+    config.httpd.max_open_sockets   = 7;  // di default: 5
+    config.httpd.max_uri_handlers   = 16;  // il numero di URI che registri
     config.httpd.server_port = 443;
     config.servercert     = (const unsigned char*)cert;
     config.servercert_len = cert_len+1;
@@ -258,9 +246,6 @@ static httpd_handle_t start_webserver(rest_server_context_t *rest_context) {
         return NULL;
     }
     // register URIs
-    httpd_register_uri_handler(server, &(httpd_uri_t){
-        .uri = "/*", .method = HTTP_GET, .handler = get_handler, .user_ctx = rest_context
-    });
     httpd_register_uri_handler(server, &(httpd_uri_t){
         .uri = "/sign_up", .method = HTTP_POST, .handler = sign_up_handler, .user_ctx = rest_context
     });
@@ -279,20 +264,34 @@ static httpd_handle_t start_webserver(rest_server_context_t *rest_context) {
     httpd_register_uri_handler(server, &(httpd_uri_t){
         .uri = "/upload_start", .method = HTTP_POST, .handler = upload_start_handler, .user_ctx = rest_context
     });
+    httpd_register_uri_handler(server, &(httpd_uri_t){
+        .uri = "/upload_finalize", .method = HTTP_POST, .handler = upload_finalize_handler, .user_ctx = rest_context
+    });
+    httpd_register_uri_handler(server, &(httpd_uri_t){
+        .uri = "/download", .method = HTTP_POST, .handler = download_handler, .user_ctx = rest_context
+    });
+    httpd_register_uri_handler(server, &(httpd_uri_t){
+        .uri = "/delete", .method = HTTP_POST, .handler = delete_handler, .user_ctx = rest_context
+    });
+    httpd_register_uri_handler(server, &(httpd_uri_t){
+        .uri = "/delete_archive", .method = HTTP_POST, .handler = delete_archive_handler, .user_ctx = rest_context
+    });
+    httpd_register_uri_handler(server, &(httpd_uri_t){
+        .uri = "/delete_account", .method = HTTP_POST, .handler = delete_account_handler, .user_ctx = rest_context
+    });
+    httpd_register_uri_handler(server, &(httpd_uri_t){
+        .uri = "/*", .method = HTTP_GET, .handler = get_handler, .user_ctx = rest_context
+    });
+    
     ESP_LOGI(TAG, "HTTPS server running");
     return server;
 }
 
-bool web_server(void){
+void web_server(void){
     static rest_server_context_t rest_context;
     strlcpy(rest_context.base_path, "/sdcard", sizeof(rest_context.base_path));
     httpd_handle_t server = start_webserver(&rest_context);
     if (server == NULL) {
-        printf( "\nFailed to start web server\n");
-        if(mounted){
-            sd_exit_critical();
-        }  
-        return false;
+        printf( "\nFailed to start web server\n");          
     }
-    return true;
 }

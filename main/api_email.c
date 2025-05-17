@@ -23,9 +23,6 @@ static esp_err_t https_request_with_pem(
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) {
         ESP_LOGE(TAG, "http_client_init failed");
-        if(mounted){
-            sd_exit_critical();
-        }
         return ESP_FAIL;
     }
 
