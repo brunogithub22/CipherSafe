@@ -525,3 +525,20 @@ static void button_task(void *arg) {
         }
     }
 }
+
+static bool generate_token(char *out, size_t out_len) {
+    if (out_len < TOKEN_STR_LEN) {
+        return false;
+    }
+    uint8_t buf[TOKEN_BYTES];
+    // Riempie buf[] con TOKEN_BYTES byte casuali veri
+    esp_fill_random(buf, sizeof(buf));  // :contentReference[oaicite:2]{index=2}
+
+    // Converte ogni byte in due caratteri esadecimali
+    for (int i = 0; i < TOKEN_BYTES; i++) {
+        // sprintf scrive "%02x" → esadecimale a due cifre
+        sprintf(&out[i * 2], "%02x", buf[i]);
+    }
+    out[TOKEN_STR_LEN - 1] = '\0';  // terminatore stringa
+    return true;
+}

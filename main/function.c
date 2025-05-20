@@ -36,50 +36,7 @@ char* digest(const char* input){
     return hex;                         // chiamante deve free(hex) :contentReference[oaicite:9]{index=9}
 }
 
-typedef struct { 
-    char *key; 
-    char *value; 
-} KV;
 
-static KV* extract_form_values_generic(const cJSON *json, int *num_items, int expected_size) {
-    KV *arr = malloc(expected_size * sizeof *arr);
-    if (!arr) {
-        *num_items = 0;
-        return NULL;
-    }
-
-    int i = 0;
-    for (cJSON *f = json->child; f && i < expected_size; f = f->next) {
-        if (!cJSON_IsString(f)) {
-            ESP_LOGW(TAG, "Skipping non‑string field %s", f->string);
-            // cleanup di quanto già duplicato
-            for (int j = 0; j < i; ++j) {
-                free(arr[j].key);
-                free(arr[j].value);
-            }
-            free(arr);
-            *num_items = 0;
-            return NULL;
-        }
-        arr[i].key   = strdup(f->string);
-        arr[i].value = strdup(f->valuestring);
-        ESP_LOGI(TAG, "key: %s, value: %s", f->string, f->valuestring);
-        if (!arr[i].key || !arr[i].value) {
-            // error on strdup → cleanup
-            for (int j = 0; j <= i; ++j) {
-                free(arr[j].key);
-                free(arr[j].value);
-            }
-            free(arr);
-            *num_items = 0;
-            return NULL;
-        }
-        i++;
-    }
-
-    *num_items = i;
-    return arr;
-}
 
 KV* extract_form_values_account(const cJSON *json, int *num_items, const char *type_form) {
     int expected = 0;

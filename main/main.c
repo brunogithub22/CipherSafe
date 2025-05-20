@@ -16,6 +16,7 @@ void app_main(void)
     button_configuration(BUTTON_GPIO);
     xTaskCreate(button_task, "button_task", 4096, NULL, 5, NULL);
 
+
     // 2) init NVS (per Wi‑Fi)
     ESP_ERROR_CHECK( nvs_flash_init() );
 

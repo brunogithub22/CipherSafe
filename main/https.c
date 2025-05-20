@@ -26,104 +26,47 @@ static esp_err_t set_content_type_from_file(httpd_req_t *req, const char *filepa
     return httpd_resp_set_type(req, mime);
 }
 
-//———————————————————————————————————————————————————
-// Single, unified streaming handler — no “fast path”
-static esp_err_t serve_static_stream(httpd_req_t *req, const char *fullpath) {
-    // 1) open the file
+static esp_err_t serve_static_stream(httpd_req_t *req, const char *fullpath)
+{
     int fd = open(fullpath, O_RDONLY);
     if (fd < 0) {
         ESP_LOGW(TAG, "File not found: %s", fullpath);
-        // send 404 and return
-        
-        return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not Found");
+        // Non inviare nulla qui, segnala solo l’errore
+        return ESP_FAIL;  
     }
+    set_content_type_from_file(req, fullpath);  // :contentReference[oaicite:0]{index=0}
 
-    // 2) set the Content-Type header
-    set_content_type_from_file(req, fullpath);
-
-    // 3) static chunk buffer in BSS (never fails)
     static uint8_t chunk[CHUNK_BUF_SIZE];
     ssize_t r;
-
-    // 4) read & send until EOF
     while ((r = read(fd, chunk, sizeof(chunk))) > 0) {
-        ssize_t to_send = r;
         uint8_t *ptr = chunk;
-
-        // retry loop for WANT_WRITE
+        ssize_t to_send = r;
         while (to_send > 0) {
             esp_err_t w = httpd_resp_send_chunk(req, (const char*)ptr, to_send);
             if (w == ESP_TLS_ERR_SSL_WANT_WRITE) {
-                // TLS wants to write—yield and retry
-                vTaskDelay(pdMS_TO_TICKS(1));
+                vTaskDelay(pdMS_TO_TICKS(1));        // :contentReference[oaicite:1]{index=1}
                 continue;
             }
             if (w != ESP_OK) {
                 ESP_LOGE(TAG, "Chunk send failed: %d", w);
                 close(fd);
-                if(mounted){
-                }
                 return ESP_FAIL;
             }
-            // httpd_resp_send_chunk only returns ESP_OK or error,
-            // so on ESP_OK we assume the full chunk was queued.
             to_send = 0;
         }
-        // yield to give Wi-Fi/TLS time
         vTaskDelay(pdMS_TO_TICKS(1));
     }
-
-    // 5) signal end-of-stream
-    httpd_resp_send_chunk(req, NULL, 0);
-
-    // 6) close file
     close(fd);
 
     if (r < 0) {
         ESP_LOGE(TAG, "Error reading file: %s", fullpath);
-        
         return ESP_FAIL;
     }
+
+    httpd_resp_send_chunk(req, NULL, 0);          // fine stream :contentReference[oaicite:2]{index=2}
     return ESP_OK;
 }
 
-
-//———————————————————————————————————————————————————
-// GET handler — unchanged logic, just calls the new streamer
-static esp_err_t get_handler(httpd_req_t *req){
-    const char *uri = req->uri;
-    char filepath[FILE_PATH_MAX];
-    rest_server_context_t *ctx = (rest_server_context_t *)req->user_ctx;
-    
-    if(strcmp(uri,"/CIPHER~1/FILE~1.JSO")==0){
-        strlcpy(filepath, ctx->base_path, sizeof(filepath));
-        strlcat(filepath, uri, sizeof(filepath));
-        ESP_LOGI(TAG,"GET JSON %s -> %s", uri, filepath);
-        size_t len; char *b=NULL;
-        bool ok = read_file(filepath,&b,&len);
-        if(!ok){
-            return httpd_resp_send_err(req,HTTPD_404_NOT_FOUND,"File not found");
-        }
-        httpd_resp_set_type(req,"application/json");
-        httpd_resp_send(req,b,len);
-        free(b);
-        return ESP_OK;
-    } else {
-        // static under /HTML
-        strlcpy(filepath, ctx->base_path, sizeof(filepath));
-        strlcat(filepath, "/HTML", sizeof(filepath));
-        if(uri[strlen(uri)-1]=='/')
-            strlcat(filepath, "/INDEX~1.HTM", sizeof(filepath));
-        else
-            strlcat(filepath, uri, sizeof(filepath));
-        ESP_LOGI(TAG,"GET static %s -> %s", uri, filepath);
-        esp_err_t err = serve_static_stream(req, filepath);
-        if(err==ESP_FAIL){
-            return httpd_resp_send_err(req,HTTPD_404_NOT_FOUND,"File not found");
-        }
-        return ESP_OK;
-    }
-}
 
 //———————————————————————————————————————————————————
 // POST body reader and sign-in/up handlers — unchanged
@@ -152,6 +95,57 @@ static char * read_request_body(httpd_req_t *req, size_t *out_len) {
     *out_len = len;
     return buf;
 }
+
+
+
+//———————————————————————————————————————————————————
+// GET handler — unchanged logic, just calls the new streamer
+static esp_err_t get_handler(httpd_req_t *req){
+    const char *uri = req->uri;
+    char filepath[FILE_PATH_MAX];
+    rest_server_context_t *ctx = (rest_server_context_t *)req->user_ctx;
+    
+    if(strcmp(uri,"/CIPHER~1/FILE~1.JSO")==0){
+        strlcpy(filepath, ctx->base_path, sizeof(filepath));
+        strlcat(filepath, uri, sizeof(filepath));
+        ESP_LOGI(TAG,"GET JSON %s -> %s", uri, filepath);
+        size_t len; char *b=NULL;
+        bool ok = read_file(filepath,&b,&len);
+        if(!ok){
+            return httpd_resp_send_err(req,HTTPD_404_NOT_FOUND,"File not found");
+        }
+        httpd_resp_set_type(req,"application/json");
+        httpd_resp_send(req,b,len);
+        free(b);
+        return ESP_OK;
+    } else{
+        // static under /HTML
+        strlcpy(filepath, ctx->base_path, sizeof(filepath));
+        strlcat(filepath, "/HTML", sizeof(filepath));
+        if(uri[strlen(uri)-1]=='/')
+            strlcat(filepath, "/INDEX~1.HTM", sizeof(filepath));
+        else
+            strlcat(filepath, uri, sizeof(filepath));
+        ESP_LOGI(TAG,"GET static %s -> %s", uri, filepath);
+        esp_err_t err = serve_static_stream(req, filepath);
+        if(err==ESP_FAIL){
+            return httpd_resp_send_err(req,HTTPD_404_NOT_FOUND,"File not found");
+        }
+        return ESP_OK;
+    }
+}
+
+
+static esp_err_t email_handler(httpd_req_t *req) {
+    size_t body_len;
+    char *body = read_request_body(req, &body_len);
+    if (!body){
+          
+        return ESP_FAIL;
+    }
+    return email_send(body, req);
+}
+
 
 static esp_err_t sign_up_handler(httpd_req_t *req) {
     size_t body_len;
@@ -212,6 +206,7 @@ static esp_err_t delete_account_handler(httpd_req_t *req) {
     }
     return delete_account(body, req);
 }
+
 
 static httpd_handle_t start_webserver(rest_server_context_t *rest_context) {
     // load cert/key
@@ -278,6 +273,9 @@ static httpd_handle_t start_webserver(rest_server_context_t *rest_context) {
     });
     httpd_register_uri_handler(server, &(httpd_uri_t){
         .uri = "/delete_account", .method = HTTP_POST, .handler = delete_account_handler, .user_ctx = rest_context
+    });
+    httpd_register_uri_handler(server, &(httpd_uri_t){
+        .uri = "/email_verify", .method = HTTP_POST, .handler = email_handler, .user_ctx = rest_context
     });
     httpd_register_uri_handler(server, &(httpd_uri_t){
         .uri = "/*", .method = HTTP_GET, .handler = get_handler, .user_ctx = rest_context

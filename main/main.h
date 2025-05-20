@@ -58,6 +58,12 @@
 #include <fcntl.h>   
 #include <dirent.h>
 #include "ff.h"  
+#include "esp_crt_bundle.h"
+#include <stdint.h>
+#include "esp_system.h"  
+
+#define BREVO_API_KEY     "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"
+#define BREVO_API_URL     "https://api.brevo.com/v3/smtp/email"
 
 #define BREVO_HOST   "api.brevo.com"
 #define BREVO_PORT   "443"
@@ -110,12 +116,20 @@
 #define CHUNKED_THRESHOLD   (8 * 1024)   // still unused, but kept for reference
 #define CHUNK_BUF_SIZE      (4 * 1024)   // 4 KiB streaming chunks
 
+#define TOKEN_BYTES   16
+#define TOKEN_STR_LEN (TOKEN_BYTES * 2 + 1)
+
 //———————————————————————————————————————————————————
 // MIME lookup remains unchanged
 typedef struct {
     const char *ext;
     const char *mime;
 } mime_map_t;
+
+typedef struct { 
+    char *key; 
+    char *value; 
+} KV;
 
 esp_err_t ret;
 sdmmc_card_t *card;
@@ -174,6 +188,7 @@ typedef struct {
 
 #define BUTTON_GPIO 22
 
-static SemaphoreHandle_t buttonSemaphore;
+static SemaphoreHandle_t buttonSemaphore = NULL;
 static volatile int count = 0;
 static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+
