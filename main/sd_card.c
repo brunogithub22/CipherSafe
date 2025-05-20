@@ -542,3 +542,33 @@ static bool generate_token(char *out, size_t out_len) {
     out[TOKEN_STR_LEN - 1] = '\0';  // terminatore stringa
     return true;
 }
+
+// Genera un ID esadecimale di 32 caratteri più terminatore
+static void generate_random_id(char *out) {
+    uint8_t buf[16];
+    esp_fill_random(buf, sizeof(buf));
+    for (int i = 0; i < 16; i++) {
+        sprintf(out + i*2, "%02x", buf[i]);
+    }
+    out[32] = '\0';
+}
+
+static void to_hex(const unsigned char *in, size_t len, char *out) {
+    static const char hex_digits[] = "0123456789abcdef";
+    for (size_t i = 0; i < len; ++i) {
+        out[i * 2]     = hex_digits[(in[i] >> 4) & 0xF];
+        out[i * 2 + 1] = hex_digits[in[i] & 0xF];
+    }
+    out[len * 2] = '\0';
+}
+
+char* digest(const char* input){
+    unsigned char bin_hash[SHA256_BIN_LEN];
+    create_key((const unsigned char*)input, bin_hash);
+
+    char *hex = malloc(SHA256_HEX_LEN);
+    if (!hex) return NULL;
+
+    to_hex(bin_hash, SHA256_BIN_LEN, hex);
+    return hex;                         // chiamante deve free(hex) :contentReference[oaicite:9]{index=9}
+}

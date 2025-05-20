@@ -68,6 +68,9 @@
 #define BREVO_HOST   "api.brevo.com"
 #define BREVO_PORT   "443"
 
+#define SHA256_BIN_LEN   32
+#define SHA256_HEX_LEN  (2*SHA256_BIN_LEN + 1)
+
 /* Imposta l'SSID e la password via configurazione di progetto, oppure impostali direttamente qui */
 #define DEFAULT_SCAN_LIST_SIZE CONFIG_EXAMPLE_SCAN_LIST_SIZE
 

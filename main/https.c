@@ -31,20 +31,21 @@ static esp_err_t serve_static_stream(httpd_req_t *req, const char *fullpath)
     int fd = open(fullpath, O_RDONLY);
     if (fd < 0) {
         ESP_LOGW(TAG, "File not found: %s", fullpath);
-        // Non inviare nulla qui, segnala solo l’errore
-        return ESP_FAIL;  
+        return ESP_FAIL;
     }
-    set_content_type_from_file(req, fullpath);  // :contentReference[oaicite:0]{index=0}
+
+    set_content_type_from_file(req, fullpath);
 
     static uint8_t chunk[CHUNK_BUF_SIZE];
     ssize_t r;
     while ((r = read(fd, chunk, sizeof(chunk))) > 0) {
-        uint8_t *ptr = chunk;
-        ssize_t to_send = r;
+        uint8_t *ptr     = chunk;
+        ssize_t to_send  = r;
         while (to_send > 0) {
             esp_err_t w = httpd_resp_send_chunk(req, (const char*)ptr, to_send);
-            if (w == ESP_TLS_ERR_SSL_WANT_WRITE) {
-                vTaskDelay(pdMS_TO_TICKS(1));        // :contentReference[oaicite:1]{index=1}
+            if (w == ESP_TLS_ERR_SSL_WANT_WRITE || w == ESP_TLS_ERR_SSL_WANT_READ) {
+                // MbedTLS in “would-block”: riprova
+                vTaskDelay(pdMS_TO_TICKS(1));
                 continue;
             }
             if (w != ESP_OK) {
@@ -52,20 +53,28 @@ static esp_err_t serve_static_stream(httpd_req_t *req, const char *fullpath)
                 close(fd);
                 return ESP_FAIL;
             }
+            // tutto il chunk è andato
             to_send = 0;
         }
+        // lascio respirare la task di rete
         vTaskDelay(pdMS_TO_TICKS(1));
     }
-    close(fd);
 
+    close(fd);
     if (r < 0) {
         ESP_LOGE(TAG, "Error reading file: %s", fullpath);
         return ESP_FAIL;
     }
 
-    httpd_resp_send_chunk(req, NULL, 0);          // fine stream :contentReference[oaicite:2]{index=2}
+    // chiudo il chunked-stream (MANDARLO UNA SOLA VOLTA)
+    if (httpd_resp_send_chunk(req, NULL, 0) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to send final chunk");
+        return ESP_FAIL;
+    }
+
     return ESP_OK;
 }
+
 
 
 //———————————————————————————————————————————————————
@@ -98,8 +107,6 @@ static char * read_request_body(httpd_req_t *req, size_t *out_len) {
 
 
 
-//———————————————————————————————————————————————————
-// GET handler — unchanged logic, just calls the new streamer
 static esp_err_t get_handler(httpd_req_t *req){
     const char *uri = req->uri;
     char filepath[FILE_PATH_MAX];
@@ -208,6 +215,27 @@ static esp_err_t delete_account_handler(httpd_req_t *req) {
 }
 
 
+esp_err_t send_code_handler(httpd_req_t *req){
+    size_t body_len;
+    char *body = read_request_body(req, &body_len);
+    if (!body){
+          
+        return ESP_FAIL;
+    }
+    return send_code(body, req);
+}
+
+esp_err_t change_password_handler(httpd_req_t *req){
+    size_t body_len;
+    char *body = read_request_body(req, &body_len);
+    if (!body){
+          
+        return ESP_FAIL;
+    }
+    return change_password(body, req);
+}
+
+
 static httpd_handle_t start_webserver(rest_server_context_t *rest_context) {
     // load cert/key
     char *cert, *key;
@@ -276,6 +304,12 @@ static httpd_handle_t start_webserver(rest_server_context_t *rest_context) {
     });
     httpd_register_uri_handler(server, &(httpd_uri_t){
         .uri = "/email_verify", .method = HTTP_POST, .handler = email_handler, .user_ctx = rest_context
+    });
+    httpd_register_uri_handler(server, &(httpd_uri_t){
+        .uri = "/send_code", .method = HTTP_POST, .handler = send_code_handler, .user_ctx = rest_context
+    });
+    httpd_register_uri_handler(server, &(httpd_uri_t){
+        .uri = "/change_password", .method = HTTP_POST, .handler = change_password_handler, .user_ctx = rest_context
     });
     httpd_register_uri_handler(server, &(httpd_uri_t){
         .uri = "/*", .method = HTTP_GET, .handler = get_handler, .user_ctx = rest_context

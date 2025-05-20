@@ -1,41 +1,4 @@
 #include "api_email.c"
-#define SHA256_BIN_LEN   32
-#define SHA256_HEX_LEN  (2*SHA256_BIN_LEN + 1)
-
-
-// Genera un ID esadecimale di 32 caratteri più terminatore
-static void generate_random_id(char *out) {
-    uint8_t buf[16];
-    esp_fill_random(buf, sizeof(buf));
-    for (int i = 0; i < 16; i++) {
-        sprintf(out + i*2, "%02x", buf[i]);
-    }
-    out[32] = '\0';
-}
-
-
-
-
-static void to_hex(const unsigned char *in, size_t len, char *out) {
-    static const char hex_digits[] = "0123456789abcdef";
-    for (size_t i = 0; i < len; ++i) {
-        out[i * 2]     = hex_digits[(in[i] >> 4) & 0xF];
-        out[i * 2 + 1] = hex_digits[in[i] & 0xF];
-    }
-    out[len * 2] = '\0';
-}
-
-char* digest(const char* input){
-    unsigned char bin_hash[SHA256_BIN_LEN];
-    create_key((const unsigned char*)input, bin_hash);
-
-    char *hex = malloc(SHA256_HEX_LEN);
-    if (!hex) return NULL;
-
-    to_hex(bin_hash, SHA256_BIN_LEN, hex);
-    return hex;                         // chiamante deve free(hex) :contentReference[oaicite:9]{index=9}
-}
-
 
 
 KV* extract_form_values_account(const cJSON *json, int *num_items, const char *type_form) {
@@ -119,6 +82,7 @@ char* write_account_file(const char* filename,KV* array,int count){
             fclose(f);   
             if(strcmp(data,"")!=0){
                 root = cJSON_Parse(data);
+                free(data);
                 if (root) {
                     cJSON *account_array = cJSON_GetObjectItemCaseSensitive(root, "accounts");
                     if (cJSON_IsArray(account_array)){
@@ -143,7 +107,7 @@ char* write_account_file(const char* filename,KV* array,int count){
                             if (jmail && strcmp(jmail->valuestring,in_email)==0)
                                 same_email = true;
                         }
-                        if(!same_email && !same_username){
+                        if(!same_email || !same_username){
                             cJSON *account = cJSON_CreateObject();
                             create_file_json_account(array,account,count);
                             cJSON_AddItemToArray(account_array, account);
@@ -176,7 +140,7 @@ char* write_account_file(const char* filename,KV* array,int count){
     return res;
 }
 
-char* check_archive(const char* filename,char* username,char* archive,char* task,char* file_name){
+char* check_archive(const char* filename,char* username,char* archive,char* password,char* task,char* file_name){
     FILE* f  = fopen(filename,"r");
     char* res = "";
     if(f != NULL){
@@ -190,6 +154,7 @@ char* check_archive(const char* filename,char* username,char* archive,char* task
             fclose(f);   
             if(strcmp(data,"")!=0){
                 root = cJSON_Parse(data);
+                free(data);
                 if (root) {
                     cJSON *archive_array = cJSON_GetObjectItemCaseSensitive(root, "archives");
                     if (cJSON_IsArray(archive_array)){
@@ -198,10 +163,17 @@ char* check_archive(const char* filename,char* username,char* archive,char* task
                         for (int y = 0; y < count_account; ++y) {
                             cJSON *acct = cJSON_GetArrayItem(archive_array,y);
                             cJSON *jauthor = cJSON_GetObjectItemCaseSensitive(acct,"author");
+                            cJSON *jpassword = cJSON_GetObjectItemCaseSensitive(acct,"password");
                             cJSON *jarchive = cJSON_GetObjectItemCaseSensitive(acct,"archive");
                             if ((jauthor && strcmp(jauthor->valuestring,username)==0)&& (jarchive && strcmp(jarchive->valuestring,archive)==0)){
                                 if(strcmp(task,"check archive")==0){
-                                    res = "ok";
+                                    char* hex = digest((const char*)password);
+                                    if(strcmp(hex,jpassword->valuestring)==0){
+                                        res = "ok";
+                                    }else{
+                                        res = "password not ok";
+                                    }
+                                    free(hex);
                                 }else if(strcmp(task,"upload file")==0){
                                     cJSON *files_array = cJSON_GetObjectItemCaseSensitive(acct,"files");
                                     if(cJSON_IsArray(files_array)){
@@ -250,6 +222,7 @@ char* delete_json_file(const char* filename,char* username,char* archive,char* f
             fclose(f);   
             if(strcmp(data,"")!=0){
                 root = cJSON_Parse(data);
+                free(data);
                 if (root) {
                     cJSON *archive_array = cJSON_GetObjectItemCaseSensitive(root, "archives");
                     if (cJSON_IsArray(archive_array)){
@@ -314,6 +287,7 @@ char* delete_json_archive(const char* filename,char* archive, char* username){
             fclose(f);   
             if(strcmp(data,"")!=0){
                 root = cJSON_Parse(data);
+                free(data);
                 if (root) {
                     cJSON *archive_array = cJSON_GetObjectItemCaseSensitive(root, "archives");
                     if (cJSON_IsArray(archive_array)){
@@ -365,6 +339,7 @@ char* delete_json_account(const char* filename, char* account){
             fclose(f);   
             if(strcmp(data,"")!=0){
                 root = cJSON_Parse(data);
+                free(data);
                 if (root) {
                     cJSON *account_array = cJSON_GetObjectItemCaseSensitive(root, "accounts");
                     if (cJSON_IsArray(account_array)){
@@ -415,6 +390,7 @@ char* write_archive(const char* filename,KV* array,int count){
             fclose(f);   
             if(strcmp(data,"")!=0){
                 root = cJSON_Parse(data);
+                free(data);
                 if (root) {
                     cJSON *archive_array = cJSON_GetObjectItemCaseSensitive(root, "archives");
                     if (cJSON_IsArray(archive_array)){
@@ -500,6 +476,7 @@ char* check_account(const char* filename,char* username,char* passowrd){
             fclose(f);   
             if(strcmp(data,"")!=0){
                 root = cJSON_Parse(data);
+                free(data);
                 if (root) {
                     cJSON *account_array = cJSON_GetObjectItemCaseSensitive(root, "accounts");
                     if (cJSON_IsArray(account_array)){
@@ -527,26 +504,6 @@ char* check_account(const char* filename,char* username,char* passowrd){
     return res;
 }
 
-
-void make_log(const char *message,const char *check,const char* password, char **out_log) {
-    size_t buf_size = strlen(message)  + 128;
-    char *log = malloc(buf_size);
-    if (!log) {
-        *out_log = NULL;
-        return;
-    }
-
-    if (strcmp(message, "ok") == 0) {
-        snprintf(log, buf_size,"{\"status\":\"ok\",\"account\":\"%s\",\"password\":\"%s\"}",check,password);
-    }
-    else {
-        log = "{\"status\":\"not ok\"}";
-    }
-
-    *out_log = log;
-}
-
-
 esp_err_t sign_up(const char *input,httpd_req_t *req) {
     int count = 0;
     cJSON *json = cJSON_Parse(input); 
@@ -562,52 +519,19 @@ esp_err_t sign_up(const char *input,httpd_req_t *req) {
         return ESP_FAIL;
     }
 
-    char *email = NULL,*username = NULL,*password = NULL;
     char* message = write_account_file("/sdcard/CIPHER~1/ACCOUN~1.JSO", array, count);
 
     // cleanup everything in one place
     for (int i = 0; i < count; ++i) {
-        if(strcmp(array[i].key,"email")==0){
-            email = strdup(array[i].value);
-        }
-        if(strcmp(array[i].key,"username")==0){
-            username = strdup(array[i].value);
-        }
-        if(strcmp(array[i].key,"password")==0){
-            password = strdup(array[i].value);
-        }
         free(array[i].key);
         free(array[i].value);
     }
     free(array);
-    if (!username) {
-        ESP_LOGE(TAG, "username missing in JSON");
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"username missing\"}",HTTPD_RESP_USE_STRLEN);
-        return ESP_FAIL;
-    }
-    if (!password) {
-        ESP_LOGE(TAG, "password missing in JSON");
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"username missing\"}",HTTPD_RESP_USE_STRLEN);
-        
-        return ESP_FAIL;
-    }
-    if (!email) {
-        ESP_LOGE(TAG, "email missing in JSON");
-        httpd_resp_set_type(req, "application/json");
-        httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"username missing\"}",HTTPD_RESP_USE_STRLEN);
-        
-        return ESP_FAIL;
-    }
-
-    char *log;
-
-    make_log(message,username,password, &log);
     
-    free(email);
-    free(username);
-    free(password);
+    char *log = "{\"status\":\"not ok\"}";
+    if(strcmp(message,"ok")==0){
+        log = "{\"status\":\"ok\"}";
+    }
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, (const char*) log, HTTPD_RESP_USE_STRLEN);
@@ -666,9 +590,11 @@ esp_err_t sign_in(const char *input, httpd_req_t *req)
 
     char* message = check_account("/sdcard/CIPHER~1/ACCOUN~1.JSO", username,password);
     printf("\nMessaggio account: %s\n",message);
-    char* log = "";
-
-    make_log(message,username,password, &log);
+    
+    char *log = "{\"status\":\"not ok\"}";
+    if(strcmp(message,"ok")==0){
+        log = "{\"status\":\"ok\"}";
+    }
 
     free(username);
     free(password);
@@ -727,9 +653,10 @@ esp_err_t new_archive(const char *input, httpd_req_t *req){
         return ESP_FAIL;
     }
     
-    char* log = "";
-
-    make_log(message,archive,password, &log);
+    char *log = "{\"status\":\"not ok\"}";
+    if(strcmp(message,"ok")==0){
+        log = "{\"status\":\"ok\"}";
+    }
 
     free(archive);
     free(password);
@@ -785,22 +712,24 @@ esp_err_t load_file(const char *input, httpd_req_t *req){
     if (!password) {
         ESP_LOGE(TAG, "password missing in JSON");
         httpd_resp_set_type(req, "application/json");
-        httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"username missing\"}",HTTPD_RESP_USE_STRLEN);
+        httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"password missing\"}",HTTPD_RESP_USE_STRLEN);
         
         return ESP_FAIL;
     }
     if (!archive) {
         ESP_LOGE(TAG, "archive missing in JSON");
         httpd_resp_set_type(req, "application/json");
-        httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"username missing\"}",HTTPD_RESP_USE_STRLEN);
+        httpd_resp_send(req,"{\"status\":\"error\",\"message\":\"archive missing\"}",HTTPD_RESP_USE_STRLEN);
         
         return ESP_FAIL;
     }
 
-    char* log = "";
-    char* message = check_archive("/sdcard/CIPHER~1/FILE~1.JSO", username,archive,"check archive","");
+    char* message = check_archive("/sdcard/CIPHER~1/FILE~1.JSO", username,archive,password,"check archive","");
 
-    make_log(message, archive,password, &log);
+    char *log = "{\"status\":\"not ok\"}";
+    if(strcmp(message,"ok")==0){
+        log = "{\"status\":\"ok\"}";
+    }
 
     free(username);
     free(password);
@@ -971,7 +900,7 @@ esp_err_t upload_chunk_handler(httpd_req_t *req) {
         create_key((unsigned char*)meta->password, key_hash256);
         if (encrypt_file(path.buf, path_enc.buf, key_hash256) == 0) {
             upload_table[slot].done = true;
-            char* res = check_archive("/sdcard/CIPHER~1/FILE~1.JSO", meta->author,meta->archive,"upload file",meta->filename);
+            char* res = check_archive("/sdcard/CIPHER~1/FILE~1.JSO", meta->author,meta->archive,"","upload file",meta->filename);
             if(strcmp(res,"ok")==0){
                 printf("\n JSON aggiornato \n");
             }
