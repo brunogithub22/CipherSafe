@@ -62,7 +62,7 @@
 #include <stdint.h>
 #include "esp_system.h"  
 
-#define BREVO_API_KEY     "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"
+#define BREVO_API_KEY     "BREVO-APIKEY"
 #define BREVO_API_URL     "https://api.brevo.com/v3/smtp/email"
 
 #define BREVO_HOST   "api.brevo.com"
